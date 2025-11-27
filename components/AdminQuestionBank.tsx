@@ -1,0 +1,671 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { Loader2, CheckSquare, Square, Trash2, Edit3, Save, Image as ImageIcon, X, Clock, Terminal, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Unit, Challenge, QuestionType } from '../types';
+import { generateImageForText, fileToBase64, generateOptionsForQuestion } from '../api';
+
+interface AdminQuestionBankProps {
+    units: Unit[];
+    setUnits: React.Dispatch<React.SetStateAction<Unit[]>>;
+}
+
+export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBankProps) {
+    const [qbUnitId, setQbUnitId] = useState(units[0]?.id || '');
+    const [qbLessonId, setQbLessonId] = useState('');
+    const [editingChallenge, setEditingChallenge] = useState<Partial<Challenge> | null>(null);
+    const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set());
+    
+    // UI State for generation
+    const [isImageGenLoading, setIsImageGenLoading] = useState(false);
+    const [isOptionGenLoading, setIsOptionGenLoading] = useState(false);
+    const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+    const [generatingQId, setGeneratingQId] = useState<string | null>(null);
+    
+    // Logging State
+    const [batchLogs, setBatchLogs] = useState<string[]>([]);
+    const logsEndRef = useRef<HTMLDivElement>(null);
+
+    // Custom Modal & Toast State (To replace native confirm/alert)
+    const [modal, setModal] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+    const currentUnit = units.find(u => u.id === qbUnitId);
+    const currentLesson = currentUnit?.lessons.find(l => l.id === qbLessonId);
+
+    // Auto-scroll logs
+    useEffect(() => {
+        if (batchLogs.length > 0) {
+            logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [batchLogs]);
+
+    // Auto-dismiss toast
+    useEffect(() => {
+        if (toast) {
+            const timer = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [toast]);
+
+    const addLog = (msg: string) => {
+        setBatchLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    };
+
+    const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+        setToast({ message, type });
+        if (type === 'error') addLog(`❌ ${message}`);
+    };
+
+    // --- Deletion Handlers ---
+
+    const handleDeleteUnit = () => {
+        if (!currentUnit) return;
+        setModal({
+            title: '删除章节',
+            message: `确定要删除章节 "${currentUnit.title}" 吗？该操作将删除该章节下的所有小节和题目，且不可恢复。`,
+            onConfirm: () => {
+                setUnits(prev => prev.filter(u => u.id !== qbUnitId));
+                setQbUnitId(units.find(u => u.id !== qbUnitId)?.id || '');
+                setQbLessonId('');
+                setModal(null);
+                showToast('章节已删除', 'success');
+            }
+        });
+    };
+
+    const handleDeleteLesson = () => {
+        if (!currentLesson || !currentUnit) return;
+        setModal({
+            title: '删除小节',
+            message: `确定要删除小节 "${currentLesson.title}" 吗？该操作将删除该小节下的所有题目，且不可恢复。`,
+            onConfirm: () => {
+                setUnits(prev => prev.map(u => {
+                    if (u.id !== qbUnitId) return u;
+                    return {
+                        ...u,
+                        lessons: u.lessons.filter(l => l.id !== qbLessonId)
+                    };
+                }));
+                setQbLessonId('');
+                setModal(null);
+                showToast('小节已删除', 'success');
+            }
+        });
+    };
+
+    const handleNewChallenge = () => {
+        setEditingChallenge({
+            id: `custom-${Date.now()}`,
+            type: QuestionType.MULTIPLE_CHOICE,
+            question: '请输入题目...',
+            options: [
+                { id: 'A', text: '选项 A' },
+                { id: 'B', text: '选项 B' }
+            ],
+            correctAnswer: 'B',
+            explanation: '在此输入解析...'
+        });
+    };
+
+    const handleEditChallenge = (challenge: Challenge) => {
+        setEditingChallenge({ ...challenge });
+    };
+
+    const handleSaveChallenge = () => {
+        if (!editingChallenge || !editingChallenge.question || !qbLessonId) {
+            showToast('请填写完整题目信息', 'error');
+            return;
+        }
+        
+        setUnits(prev => prev.map(u => {
+            if (u.id !== qbUnitId) return u;
+            return {
+                ...u,
+                lessons: u.lessons.map(l => {
+                    if (l.id !== qbLessonId) return l;
+                    const exists = l.challenges.find(c => c.id === editingChallenge.id);
+                    if (exists) {
+                        return {
+                            ...l,
+                            challenges: l.challenges.map(c => c.id === editingChallenge.id ? (editingChallenge as Challenge) : c)
+                        };
+                    } else {
+                        return {
+                            ...l,
+                            challenges: [...l.challenges, (editingChallenge as Challenge)]
+                        };
+                    }
+                })
+            };
+        }));
+        setEditingChallenge(null);
+        showToast('题目保存成功', 'success');
+    };
+
+    const handleDeleteChallenge = (challengeId: string) => {
+        setModal({
+            title: '删除确认',
+            message: '确定要永久删除这道题目吗？',
+            onConfirm: () => {
+                setUnits(prev => prev.map(u => {
+                    if(u.id !== qbUnitId) return u;
+                    return {
+                        ...u,
+                        lessons: u.lessons.map(l => {
+                            if(l.id !== qbLessonId) return l;
+                            return {
+                                ...l,
+                                challenges: l.challenges.filter(c => c.id !== challengeId)
+                            };
+                        })
+                    };
+                }));
+                if (editingChallenge?.id === challengeId) setEditingChallenge(null);
+                const newSet = new Set(selectedQIds);
+                newSet.delete(challengeId);
+                setSelectedQIds(newSet);
+                setModal(null);
+                showToast('题目已删除', 'success');
+            }
+        });
+    };
+
+    const handleToggleSelection = (id: string) => {
+        const newSet = new Set(selectedQIds);
+        if (newSet.has(id)) newSet.delete(id);
+        else newSet.add(id);
+        setSelectedQIds(newSet);
+    };
+
+    const handleChallengeImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0] && editingChallenge) {
+            const base64 = await fileToBase64(e.target.files[0]);
+            setEditingChallenge({ ...editingChallenge, imageUrl: base64 });
+        }
+    };
+
+    // Helper to get text for correct answer
+    const getAnswerText = (challenge: Partial<Challenge>): string => {
+        if (!challenge.correctAnswer) return '';
+        if (challenge.type === QuestionType.FILL_BLANK) return challenge.correctAnswer;
+        
+        // For Multiple Choice / True False, find the option text
+        const option = challenge.options?.find(o => o.id === challenge.correctAnswer);
+        return option ? option.text : challenge.correctAnswer;
+    };
+
+    const handleSingleGenImage = async () => {
+        if (!editingChallenge || !editingChallenge.question) return;
+        setIsImageGenLoading(true);
+        
+        const answerText = getAnswerText(editingChallenge);
+        // Pass both question and answer context
+        const img = await generateImageForText(editingChallenge.question, answerText);
+        
+        if (img) {
+            setEditingChallenge({ ...editingChallenge, imageUrl: img });
+            showToast('配图生成成功', 'success');
+        } else {
+            showToast('配图生成失败，请重试', 'error');
+        }
+        setIsImageGenLoading(false);
+    };
+
+    const handleGenerateOptions = async () => {
+        if (!editingChallenge || !editingChallenge.question) return;
+        setIsOptionGenLoading(true);
+        try {
+            const options = await generateOptionsForQuestion(editingChallenge.question, editingChallenge.type || QuestionType.MULTIPLE_CHOICE);
+            if (options && options.length > 0) {
+                setEditingChallenge(prev => ({
+                    ...prev!,
+                    options: options,
+                    correctAnswer: prev?.correctAnswer || options[0].id 
+                }));
+                showToast('选项生成成功', 'success');
+            } else {
+                showToast('生成失败，请重试', 'error');
+            }
+        } catch (e) {
+            showToast('生成出错: ' + (e instanceof Error ? e.message : String(e)), 'error');
+        } finally {
+            setIsOptionGenLoading(false);
+        }
+    };
+
+    // The Logic to execute batch generation
+    const executeBatchGeneration = async () => {
+        if (!currentLesson) return;
+        const tasks = currentLesson.challenges.filter(c => selectedQIds.has(c.id));
+        
+        setIsBatchProcessing(true);
+        setBatchLogs([]); 
+        addLog(`开始任务：准备处理 ${tasks.length} 个题目`);
+        setModal(null); // Close modal
+        
+        let successCount = 0;
+        let failCount = 0;
+
+        try {
+            for (let i = 0; i < tasks.length; i++) {
+                const task = tasks[i];
+                setGeneratingQId(task.id);
+                addLog(`[${i + 1}/${tasks.length}] 正在生成: "${task.question.slice(0, 10)}..."`);
+      
+                try {
+                    // Extract answer context for batch items
+                    const answerText = getAnswerText(task);
+                    
+                    const img = await generateImageForText(task.question, answerText);
+                    
+                    if (img) {
+                        successCount++;
+                        addLog(`✅ 生成成功`);
+                        setUnits(prev => prev.map(u => {
+                            if (u.id !== qbUnitId) return u;
+                            return {
+                                ...u,
+                                lessons: u.lessons.map(l => {
+                                    if (l.id !== qbLessonId) return l;
+                                    return {
+                                        ...l,
+                                        challenges: l.challenges.map(c => 
+                                            c.id === task.id ? { ...c, imageUrl: img } : c
+                                        )
+                                    };
+                                })
+                            };
+                        }));
+                    } else {
+                        failCount++;
+                        addLog(`❌ 生成失败: API 返回空数据`);
+                    }
+                } catch (error) {
+                    failCount++;
+                    addLog(`❌ 异常: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+        } catch (e) {
+            console.error("Batch processing error", e);
+            addLog(`⛔ 严重错误: ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+            setGeneratingQId(null);
+            setIsBatchProcessing(false);
+            setSelectedQIds(new Set());
+            addLog(`🏁 任务结束. 成功: ${successCount}, 失败: ${failCount}`);
+            showToast(`批量处理完成! 成功 ${successCount} 个`, 'success');
+        }
+    };
+
+    // Trigger for the button
+    const handleBatchGenerateClick = () => {
+        if (selectedQIds.size === 0) return;
+        
+        if (!currentLesson) {
+            showToast("找不到当前章节信息，请刷新重试", 'error');
+            return;
+        }
+
+        const tasks = currentLesson.challenges.filter(c => selectedQIds.has(c.id));
+        
+        if (tasks.length === 0) {
+            showToast("选中的题目不存在或已被删除", 'error');
+            return;
+        }
+
+        // Use Custom Modal instead of window.confirm
+        setModal({
+            title: '批量生成配图',
+            message: `即将为 ${tasks.length} 个题目生成AI配图。这可能需要几分钟时间，且会消耗一定的API额度。确定要继续吗？`,
+            onConfirm: executeBatchGeneration
+        });
+    };
+
+    return (
+        <div className="grid lg:grid-cols-12 gap-6 h-[calc(100vh-250px)] min-h-[500px] relative">
+              {/* Custom Modal Overlay */}
+              {modal && (
+                  <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-2xl animate-in fade-in duration-200">
+                      <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 border border-gray-100 transform scale-100 animate-in zoom-in-95 duration-200">
+                          <h3 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2">
+                              <AlertTriangle className="text-orange-500" />
+                              {modal.title}
+                          </h3>
+                          <p className="text-gray-600 mb-6 text-sm leading-relaxed">{modal.message}</p>
+                          <div className="flex gap-3 justify-end">
+                              <button 
+                                  onClick={() => setModal(null)}
+                                  className="px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-100 transition-colors"
+                              >
+                                  取消
+                              </button>
+                              <button 
+                                  onClick={modal.onConfirm}
+                                  className="px-4 py-2 rounded-lg text-sm font-bold bg-black text-white hover:bg-gray-800 transition-colors shadow-lg"
+                              >
+                                  确认继续
+                              </button>
+                          </div>
+                      </div>
+                  </div>
+              )}
+
+              {/* Toast Notification */}
+              {toast && (
+                  <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-xl flex items-center gap-2 font-bold text-sm animate-in slide-in-from-top-4 fade-in duration-300 ${
+                      toast.type === 'success' ? 'bg-green-500 text-white' : 
+                      toast.type === 'error' ? 'bg-red-500 text-white' : 'bg-gray-800 text-white'
+                  }`}>
+                      {toast.type === 'success' ? <CheckSquare size={16} /> : <AlertCircle size={16} />}
+                      {toast.message}
+                  </div>
+              )}
+
+              {/* Left Column: Navigation & List */}
+              <div className="lg:col-span-4 flex flex-col gap-4 bg-white p-4 rounded-2xl border-2 border-gray-200 shadow-sm overflow-hidden h-full">
+                  <div className="flex flex-col gap-2 shrink-0">
+                      <label className="text-xs font-bold text-gray-400 uppercase">1. 选择章节</label>
+                      <div className="flex gap-2">
+                        <select 
+                            className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm font-medium focus:border-orange-500 outline-none bg-white text-gray-900"
+                            value={qbUnitId}
+                            onChange={(e) => { setQbUnitId(e.target.value); setQbLessonId(''); setSelectedQIds(new Set()); setBatchLogs([]); }}
+                        >
+                            {units.map(u => <option key={u.id} value={u.id}>{u.title}</option>)}
+                        </select>
+                        <button 
+                            onClick={handleDeleteUnit}
+                            disabled={!qbUnitId}
+                            className="px-2 bg-red-50 text-red-500 rounded-xl border border-red-100 hover:bg-red-100 transition-colors"
+                            title="删除章节"
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                      </div>
+                  </div>
+                  
+                  <div className="flex flex-col gap-2 shrink-0">
+                      <label className="text-xs font-bold text-gray-400 uppercase">2. 选择小节</label>
+                      <div className="flex gap-2">
+                        <select 
+                            className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm font-medium focus:border-orange-500 outline-none bg-white text-gray-900"
+                            value={qbLessonId}
+                            onChange={(e) => { setQbLessonId(e.target.value); setSelectedQIds(new Set()); setBatchLogs([]); }}
+                        >
+                            <option value="">-- 请选择小节 --</option>
+                            {units.find(u => u.id === qbUnitId)?.lessons.map(l => (
+                                <option key={l.id} value={l.id}>{l.title}</option>
+                            ))}
+                        </select>
+                        <button 
+                            onClick={handleDeleteLesson}
+                            disabled={!qbLessonId}
+                            className="px-2 bg-red-50 text-red-500 rounded-xl border border-red-100 hover:bg-red-100 transition-colors"
+                            title="删除小节"
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                      </div>
+                  </div>
+
+                  {/* Batch Logs Display */}
+                  {batchLogs.length > 0 && (
+                      <div className="shrink-0 bg-gray-900 rounded-xl p-3 max-h-32 overflow-y-auto border border-gray-700 shadow-inner">
+                          <div className="flex items-center gap-2 text-gray-400 text-xs font-bold mb-2 sticky top-0 bg-gray-900 pb-1 border-b border-gray-800">
+                              <Terminal size={12} /> 处理日志
+                          </div>
+                          <div className="space-y-1 font-mono text-[10px]">
+                              {batchLogs.map((log, i) => (
+                                  <div key={i} className={`${log.includes('❌') || log.includes('⛔') ? 'text-red-400' : log.includes('✅') ? 'text-green-400' : 'text-gray-300'}`}>
+                                      {log}
+                                  </div>
+                              ))}
+                              <div ref={logsEndRef} />
+                          </div>
+                      </div>
+                  )}
+
+                  <div className="flex-1 overflow-y-auto mt-2 border-t pt-2 min-h-0">
+                      <div className="flex justify-between items-center mb-2 shrink-0">
+                          <label className="text-xs font-bold text-gray-400 uppercase">题目列表</label>
+                          <div className="flex gap-2">
+                            {selectedQIds.size > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={handleBatchGenerateClick}
+                                    disabled={isBatchProcessing}
+                                    className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-lg font-bold hover:bg-yellow-200 disabled:opacity-50 flex items-center gap-1 transition-colors shadow-sm"
+                                >
+                                    {isBatchProcessing ? <Loader2 size={12} className="animate-spin" /> : '🍌'} 批量({selectedQIds.size})
+                                </button>
+                            )}
+                            <button 
+                                onClick={handleNewChallenge}
+                                disabled={!qbLessonId || isBatchProcessing}
+                                className="text-xs bg-orange-100 text-orange-600 px-2 py-1 rounded-lg font-bold hover:bg-orange-200 disabled:opacity-50 shadow-sm"
+                            >
+                                + 新增
+                            </button>
+                          </div>
+                      </div>
+                      
+                      <div className="space-y-2 pb-4">
+                          {!qbLessonId ? (
+                              <div className="text-center text-gray-400 py-10 text-sm">请先选择小节</div>
+                          ) : currentLesson?.challenges.length === 0 ? (
+                              <div className="text-center text-gray-400 py-10 text-sm">暂无题目</div>
+                          ) : (
+                              currentLesson?.challenges.map((c, idx) => (
+                                  <div 
+                                    key={c.id}
+                                    onClick={() => !isBatchProcessing && handleEditChallenge(c)}
+                                    className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex gap-2 items-start ${editingChallenge?.id === c.id ? 'border-orange-500 bg-orange-50' : 'border-gray-100 hover:border-orange-200'} ${isBatchProcessing && generatingQId !== c.id ? 'opacity-50 pointer-events-none' : ''}`}
+                                  >
+                                      <div onClick={(e) => { e.stopPropagation(); if(!isBatchProcessing) handleToggleSelection(c.id); }} className="mt-1 cursor-pointer text-gray-400 hover:text-blue-500 pointer-events-auto">
+                                          {selectedQIds.has(c.id) ? <CheckSquare size={16} className="text-blue-500"/> : <Square size={16} />}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                          <div className="flex justify-between mb-1">
+                                            <div className="flex gap-2 items-center">
+                                                <span className="text-[10px] bg-gray-200 text-gray-600 px-1 rounded">{c.type}</span>
+                                                {/* Progress Indicators */}
+                                                {generatingQId === c.id && (
+                                                    <span className="text-[10px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse font-bold">
+                                                        <Loader2 size={10} className="animate-spin"/> 生成中...
+                                                    </span>
+                                                )}
+                                                {isBatchProcessing && selectedQIds.has(c.id) && generatingQId !== c.id && (
+                                                    <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                                                        <Clock size={10} /> 排队中
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteChallenge(c.id); }} 
+                                                className="text-gray-400 hover:text-red-500"
+                                                disabled={isBatchProcessing}
+                                            >
+                                                <Trash2 size={14}/>
+                                            </button>
+                                          </div>
+                                          <p className="text-xs font-bold text-gray-700 line-clamp-2">{c.question}</p>
+                                          {c.imageUrl && <span className="text-[10px] text-green-600 flex items-center gap-1 mt-1 font-bold">🍌 已配图</span>}
+                                      </div>
+                                  </div>
+                              ))
+                          )}
+                      </div>
+                  </div>
+              </div>
+
+              {/* Right Column: Editor */}
+              <div className="lg:col-span-8 bg-white p-6 rounded-2xl border-2 border-gray-200 shadow-sm overflow-y-auto h-full">
+                  {!editingChallenge ? (
+                      <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                          <Edit3 size={48} className="mb-4 opacity-20" />
+                          <p>请在左侧选择题目或点击“新增”</p>
+                          {isBatchProcessing && (
+                              <div className="mt-4 p-4 bg-yellow-50 text-yellow-700 rounded-xl flex items-center gap-2 border border-yellow-100 animate-in fade-in slide-in-from-bottom-2">
+                                  <Loader2 className="animate-spin" /> 正在批量处理中，请稍候...
+                              </div>
+                          )}
+                      </div>
+                  ) : (
+                      <div className="space-y-6">
+                          <div className="flex justify-between items-center border-b pb-4">
+                              <h3 className="font-bold text-lg text-gray-800">题目编辑器</h3>
+                              <div className="flex gap-2">
+                                  <button onClick={() => setEditingChallenge(null)} className="px-4 py-2 rounded-lg font-bold text-sm text-gray-500 hover:bg-gray-100">取消</button>
+                                  <button onClick={handleSaveChallenge} className="px-4 py-2 rounded-lg font-bold text-sm bg-orange-500 text-white hover:bg-orange-600 flex items-center gap-2"><Save size={16}/> 保存更改</button>
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-500 mb-1">题目类型</label>
+                                  <select 
+                                    className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm bg-white text-gray-900"
+                                    value={editingChallenge.type}
+                                    onChange={(e) => setEditingChallenge({ ...editingChallenge, type: e.target.value as QuestionType })}
+                                  >
+                                      <option value="MULTIPLE_CHOICE">单项选择题</option>
+                                      <option value="TRUE_FALSE">判断题</option>
+                                      <option value="FILL_BLANK">填空题</option>
+                                  </select>
+                              </div>
+                          </div>
+
+                          <div>
+                              <label className="block text-xs font-bold text-gray-500 mb-1">题干内容</label>
+                              <textarea 
+                                className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm focus:border-orange-500 outline-none bg-white text-gray-900 placeholder-gray-400"
+                                rows={3}
+                                value={editingChallenge.question}
+                                onChange={(e) => setEditingChallenge({ ...editingChallenge, question: e.target.value })}
+                              />
+                          </div>
+
+                          <div>
+                              <div className="flex justify-between items-center mb-1">
+                                <label className="block text-xs font-bold text-gray-500">图片 (可选)</label>
+                                <button 
+                                    onClick={handleSingleGenImage}
+                                    disabled={isImageGenLoading || !editingChallenge.question}
+                                    className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full font-bold hover:bg-yellow-200 transition-colors flex items-center gap-1 disabled:opacity-50"
+                                >
+                                    {isImageGenLoading ? <Loader2 size={12} className="animate-spin" /> : '🍌'} AI 生成配图
+                                </button>
+                              </div>
+                              <div className="flex items-start gap-4">
+                                  <div className="w-32 h-32 bg-gray-50 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center relative overflow-hidden group">
+                                      {editingChallenge.imageUrl ? (
+                                          <img src={editingChallenge.imageUrl} alt="preview" className="w-full h-full object-contain" />
+                                      ) : (
+                                          <ImageIcon className="text-gray-300" />
+                                      )}
+                                      <input type="file" accept="image/*" onChange={handleChallengeImageUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                          <span className="text-white text-xs font-bold">点击上传</span>
+                                      </div>
+                                  </div>
+                                  <div className="text-xs text-gray-400 mt-2 flex-1">
+                                      点击左侧方块上传本地图片，或者点击上方 🍌 按钮让 AI 自动生成。<br/>
+                                      {editingChallenge.imageUrl && (
+                                          <button onClick={() => setEditingChallenge({...editingChallenge, imageUrl: undefined})} className="block mt-2 text-red-500 hover:underline">删除当前图片</button>
+                                      )}
+                                  </div>
+                              </div>
+                          </div>
+
+                          {editingChallenge.type !== 'FILL_BLANK' && (
+                              <div className="space-y-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                                  <div className="flex justify-between items-center">
+                                      <label className="block text-xs font-bold text-gray-500">选项列表</label>
+                                      <div className="flex gap-2">
+                                          <button 
+                                            onClick={handleGenerateOptions}
+                                            disabled={isOptionGenLoading || !editingChallenge.question}
+                                            className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-lg font-bold hover:bg-purple-200 disabled:opacity-50 flex items-center gap-1 transition-colors"
+                                          >
+                                              {isOptionGenLoading ? <Loader2 size={12} className="animate-spin" /> : '✨'} AI 生成选项
+                                          </button>
+                                          <button 
+                                            onClick={() => {
+                                                const newId = String.fromCharCode(65 + (editingChallenge.options?.length || 0));
+                                                setEditingChallenge({
+                                                    ...editingChallenge,
+                                                    options: [...(editingChallenge.options || []), { id: newId, text: '' }]
+                                                })
+                                            }}
+                                            className="text-xs text-blue-600 font-bold hover:underline"
+                                          >
+                                              + 添加选项
+                                          </button>
+                                      </div>
+                                  </div>
+                                  {editingChallenge.options?.map((opt, idx) => (
+                                      <div key={idx} className="flex gap-2 items-center">
+                                          <div className="w-8 h-8 flex items-center justify-center bg-white border rounded font-bold text-gray-500 text-xs">
+                                              {opt.id}
+                                          </div>
+                                          <input 
+                                            type="text" 
+                                            className="flex-1 p-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
+                                            value={opt.text}
+                                            onChange={(e) => {
+                                                const newOpts = [...(editingChallenge.options || [])];
+                                                newOpts[idx].text = e.target.value;
+                                                setEditingChallenge({ ...editingChallenge, options: newOpts });
+                                            }}
+                                          />
+                                          <input 
+                                            type="radio" 
+                                            name="correctAnswer"
+                                            checked={editingChallenge.correctAnswer === opt.id}
+                                            onChange={() => setEditingChallenge({ ...editingChallenge, correctAnswer: opt.id })}
+                                            className="w-4 h-4 text-green-600"
+                                          />
+                                          <button 
+                                            onClick={() => {
+                                                const newOpts = editingChallenge.options?.filter((_, i) => i !== idx);
+                                                setEditingChallenge({ ...editingChallenge, options: newOpts });
+                                            }}
+                                            className="text-gray-400 hover:text-red-500"
+                                          >
+                                              <X size={16}/>
+                                          </button>
+                                      </div>
+                                  ))}
+                                  <p className="text-xs text-gray-400 mt-1">* 选中单选框以标记正确答案</p>
+                              </div>
+                          )}
+
+                          {editingChallenge.type === 'FILL_BLANK' && (
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-500 mb-1">正确答案 (文本)</label>
+                                  <input 
+                                    type="text" 
+                                    className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm bg-white text-gray-900 placeholder-gray-400"
+                                    value={editingChallenge.correctAnswer}
+                                    placeholder="如果是多空题，请使用 || 分隔答案 (例如: 5||7)"
+                                    onChange={(e) => setEditingChallenge({ ...editingChallenge, correctAnswer: e.target.value })}
+                                  />
+                                  <p className="text-[10px] text-gray-400 mt-1">提示：如果题目中有两个空，请用双竖线 || 分隔两个答案。</p>
+                              </div>
+                          )}
+
+                          <div>
+                              <label className="block text-xs font-bold text-gray-500 mb-1">答案解析</label>
+                              <textarea 
+                                className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-green-500 bg-white text-gray-900 placeholder-gray-400"
+                                rows={2}
+                                value={editingChallenge.explanation}
+                                onChange={(e) => setEditingChallenge({ ...editingChallenge, explanation: e.target.value })}
+                              />
+                          </div>
+                      </div>
+                  )}
+              </div>
+          </div>
+    );
+}

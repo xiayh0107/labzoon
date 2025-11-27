@@ -1,0 +1,5 @@
+{
+  "name": "LabZoon: 实验动物学",
+  "description": "A Duolingo-style gamified learning platform for Medical Experimental Zoology (医学实验动物学). Features interactive lessons, progress tracking, and an admin panel for content expansion.",
+  "requestFramePermissions": []
+}

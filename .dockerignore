@@ -1,0 +1,11 @@
+# Docker-specific ignore file
+node_modules
+.git
+.gitignore
+*.md
+.env*
+!.env.example
+dist
+.vscode
+.idea
+*.log
