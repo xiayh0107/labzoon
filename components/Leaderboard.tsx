@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabase';
+import { apiClient } from '../apiClient';
 import { UserProgress } from '../types';
 import { Trophy, Medal, Crown, Loader2, Zap, AlertTriangle } from 'lucide-react';
 
@@ -17,30 +17,12 @@ export default function Leaderboard({ currentUserId }: { currentUserId: string }
         const fetchLeaderboard = async () => {
             setLoading(true);
             try {
-                // Fetch all user progress
-                // Note: Ensure RLS policy on 'user_progress' allows SELECT for authenticated users
-                const { data, error } = await supabase
-                    .from('user_progress')
-                    .select('user_id, data')
-                    .limit(50); // Get top 50
-
-                if (error) {
-                    if (error.code === '42501') {
-                         throw new Error("权限不足：请更新数据库策略以允许查看排行榜。");
-                    }
-                    throw error;
-                }
+                // Fetch leaderboard via API
+                const data = await apiClient.fetchLeaderboard();
 
                 if (data) {
-                    // Parse and sort
-                    const parsed: LeaderboardEntry[] = data.map((row: any) => ({
-                        ...row.data,
-                        userId: row.user_id
-                    }));
-
-                    // Sort by XP descending
-                    const sorted = parsed.sort((a, b) => (b.xp || 0) - (a.xp || 0));
-                    setEntries(sorted);
+                    // Data is already sorted by XP descending from API
+                    setEntries(data);
                 }
             } catch (err: any) {
                 console.error("Leaderboard fetch error:", err);
@@ -69,6 +51,21 @@ export default function Leaderboard({ currentUserId }: { currentUserId: string }
             case 2: return <Medal className="w-6 h-6 text-orange-400 fill-orange-400" />;
             default: return <span className="font-bold w-6 text-center">{index + 1}</span>;
         }
+    };
+
+    const maskEmail = (email: string) => {
+        if (!email) return '';
+        const atIndex = email.indexOf('@');
+        if (atIndex < 1) return email;
+        
+        const name = email.substring(0, atIndex);
+        const domain = email.substring(atIndex);
+        
+        // Keep first 2 chars, mask the rest of the name
+        if (name.length <= 2) {
+            return name + '****' + domain;
+        }
+        return name.substring(0, 2) + '****' + domain;
     };
 
     if (loading) {
@@ -121,12 +118,12 @@ export default function Leaderboard({ currentUserId }: { currentUserId: string }
                             </div>
                             
                             <div className="flex-shrink-0 w-12 h-12 rounded-full bg-green-500 flex items-center justify-center text-white font-bold text-lg border-2 border-white shadow mr-4 uppercase">
-                                {(entry.email || entry.username || '?').charAt(0)}
+                                {(entry.username || entry.email || '?').charAt(0)}
                             </div>
 
                             <div className="flex-1 min-w-0">
                                 <h4 className={`font-bold truncate ${isCurrentUser ? 'text-blue-700' : 'text-gray-800'}`}>
-                                    {entry.username || entry.email || '神秘用户'}
+                                    {entry.username || (entry.email ? maskEmail(entry.email) : '神秘用户')}
                                     {isCurrentUser && <span className="ml-2 text-[10px] bg-blue-200 text-blue-700 px-2 py-0.5 rounded-full">我</span>}
                                 </h4>
                                 <div className="text-xs text-gray-400 flex items-center gap-2">

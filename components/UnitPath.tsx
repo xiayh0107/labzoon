@@ -8,6 +8,7 @@ interface UnitPathProps {
 }
 
 export default function UnitPath({ units, onStartLesson }: UnitPathProps) {
+
   return (
     <div className="flex flex-col items-center w-full max-w-lg mx-auto pb-24 md:pb-0">
       {units.map((unit) => (
@@ -26,7 +27,11 @@ export default function UnitPath({ units, onStartLesson }: UnitPathProps) {
               const offset = idx % 2 === 0 ? '0px' : (idx % 4 === 1 ? '40px' : '-40px');
               
               return (
-                <div key={lesson.id} style={{ transform: `translateX(${offset})` }} className="relative group">
+                <div 
+                  key={lesson.id} 
+                  style={{ transform: `translateX(${offset})` }} 
+                  className="relative group"
+                >
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 bg-gray-200 rounded-full -z-10" />
                   <button
                     onClick={() => !lesson.locked && onStartLesson(unit.id, lesson.id)}

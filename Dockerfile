@@ -7,43 +7,47 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
+COPY tsconfig*.json ./
 
 # Install dependencies
 RUN npm ci
 
-# Copy source code
+# Copy source code (including .env file)
 COPY . .
 
-# Build the application
-# Build-time env vars are baked into the bundle
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ARG VITE_GEMINI_API_KEY
-ARG VITE_OPENAI_API_KEY
-ARG VITE_AI_PROVIDER
-ARG VITE_AI_BASE_URL
-ARG VITE_AI_TEXT_MODEL
-ARG VITE_AI_IMAGE_MODEL
-ARG VITE_AI_TEMPERATURE
-ARG VITE_AI_TOP_P
-ARG VITE_AI_TOP_K
-ARG VITE_AI_MAX_OUTPUT_TOKENS
-
-RUN npm run build
+# Load .env file and build with environment variables baked in
+# The .env file is copied above and will be used by Vite during build
+RUN if [ -f .env ]; then \
+      echo "Loading .env file for build..."; \
+      export $(grep -v '^#' .env | grep -v '^$' | xargs); \
+    fi && \
+    # Override API URL for production (same origin)
+    export VITE_API_URL=/api && \
+    npm run build && \
+    npm run build:server
 
 # =================================
 # Stage 2: Production
 # =================================
-FROM nginx:alpine
+FROM node:20-alpine
 
-# Copy custom nginx config
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-# Copy built files from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy package files for production dependencies
+COPY package*.json ./
 
-# Expose port 80
-EXPOSE 80
+# Install ONLY production dependencies
+RUN npm ci --only=production
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Copy built assets from builder
+COPY --from=builder /app/dist ./dist
+
+# Copy .env for runtime (backend server needs it)
+COPY --from=builder /app/.env ./.env
+
+# Expose port
+ENV PORT=5000
+EXPOSE 5000
+
+# Start server (will load .env at runtime for backend)
+CMD ["node", "--env-file=.env", "dist/server.js"]

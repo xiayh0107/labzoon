@@ -40,8 +40,8 @@ if (INITIAL_UNITS[1]) {
   INITIAL_UNITS[1].lessons[0].challenges = [
     {
       id: 'q1-1',
-      type: QuestionType.MULTIPLE_CHOICE,
-      question: '“实验动物” (Laboratory Animal) 与一般动物的主要区别是什么？',
+      type: QuestionType.SINGLE_CHOICE,
+      question: '"实验动物" (Laboratory Animal) 与一般动物的主要区别是什么？',
       options: [
         { id: 'a', text: '体型更小，食量更少' },
         { id: 'b', text: '经人工培育，遗传背景明确，微生物控制' },

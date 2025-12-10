@@ -17,6 +17,7 @@ services:
         - VITE_AI_TOP_P=${VITE_AI_TOP_P}
         - VITE_AI_TOP_K=${VITE_AI_TOP_K}
         - VITE_AI_MAX_OUTPUT_TOKENS=${VITE_AI_MAX_OUTPUT_TOKENS}
+    image: labzoon-app:latest
     ports:
       - "${PORT:-3000}:80"
     restart: unless-stopped

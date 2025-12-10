@@ -3,17 +3,23 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, CheckSquare, Square, Trash2, Edit3, Save, Image as ImageIcon, X, Clock, Terminal, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Unit, Challenge, QuestionType } from '../types';
 import { generateImageForText, fileToBase64, generateOptionsForQuestion } from '../api';
+import { apiClientV2 } from '../apiClient';
 
 interface AdminQuestionBankProps {
     units: Unit[];
     setUnits: React.Dispatch<React.SetStateAction<Unit[]>>;
+    userId?: string;
 }
 
-export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBankProps) {
+export default function AdminQuestionBank({ units, setUnits, userId }: AdminQuestionBankProps) {
     const [qbUnitId, setQbUnitId] = useState(units[0]?.id || '');
     const [qbLessonId, setQbLessonId] = useState('');
     const [editingChallenge, setEditingChallenge] = useState<Partial<Challenge> | null>(null);
     const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set());
+    
+    // Dynamic loading state
+    const [isLoadingChallenges, setIsLoadingChallenges] = useState(false);
+    const [loadedLessons, setLoadedLessons] = useState<Set<string>>(new Set());
     
     // UI State for generation
     const [isImageGenLoading, setIsImageGenLoading] = useState(false);
@@ -31,6 +37,83 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
 
     const currentUnit = units.find(u => u.id === qbUnitId);
     const currentLesson = currentUnit?.lessons.find(l => l.id === qbLessonId);
+
+    // Dynamic load challenges when lesson is selected
+    useEffect(() => {
+        if (!qbLessonId || !qbUnitId) return;
+        
+        const cacheKey = `${qbUnitId}:${qbLessonId}`;
+        // Skip if already loaded
+        if (loadedLessons.has(cacheKey)) return;
+        
+        // Check if lesson already has challenges loaded
+        const lesson = units.find(u => u.id === qbUnitId)?.lessons.find(l => l.id === qbLessonId);
+        if (lesson && lesson.challenges && lesson.challenges.length > 0) {
+            setLoadedLessons(prev => new Set(prev).add(cacheKey));
+            return;
+        }
+        
+        // Fetch challenges using v2 API
+        const loadChallenges = async () => {
+            setIsLoadingChallenges(true);
+            try {
+                const challenges = await apiClientV2.fetchChallenges(qbLessonId);
+                if (challenges && challenges.length > 0) {
+                    // Convert v2 format to v1 format with smart type detection
+                    const convertedChallenges: Challenge[] = challenges.map(c => {
+                        // 标准化类型字段
+                        let normalizedType = (c.type || '').toUpperCase();
+                        let normalizedAnswer = c.correct_answer || '';
+                        
+                        // 智能判断真正的题型
+                        if (normalizedType === 'MULTIPLE_CHOICE') {
+                            const hasComma = normalizedAnswer.includes(',');
+                            const isConsecutiveLetters = /^[A-Da-d]{2,}$/.test(normalizedAnswer.trim());
+                            
+                            if (hasComma || isConsecutiveLetters) {
+                                // 确实是多选题
+                                if (isConsecutiveLetters && !hasComma) {
+                                    normalizedAnswer = normalizedAnswer.toUpperCase().split('').join(',');
+                                }
+                            } else {
+                                // 只有一个答案，实际是单选题
+                                normalizedType = 'SINGLE_CHOICE';
+                            }
+                        }
+                        
+                        return {
+                            id: c.id,
+                            type: normalizedType as QuestionType,
+                            question: c.question,
+                            correctAnswer: normalizedAnswer,
+                            options: c.options,
+                            explanation: c.explanation,
+                            imageUrl: c.image_url
+                        };
+                    });
+                    // Update units with loaded challenges
+                    setUnits(prev => prev.map(u => {
+                        if (u.id !== qbUnitId) return u;
+                        return {
+                            ...u,
+                            lessons: u.lessons.map(l => {
+                                if (l.id !== qbLessonId) return l;
+                                return { ...l, challenges: convertedChallenges };
+                            })
+                        };
+                    }));
+                    setLoadedLessons(prev => new Set(prev).add(cacheKey));
+                }
+            } catch (error) {
+                console.error('Failed to load challenges:', error);
+                showToast('加载题目失败', 'error');
+            } finally {
+                setIsLoadingChallenges(false);
+            }
+        };
+        
+        loadChallenges();
+    }, [qbUnitId, qbLessonId]);
 
     // Auto-scroll logs
     useEffect(() => {
@@ -96,7 +179,7 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
     const handleNewChallenge = () => {
         setEditingChallenge({
             id: `custom-${Date.now()}`,
-            type: QuestionType.MULTIPLE_CHOICE,
+            type: QuestionType.SINGLE_CHOICE,
             question: '请输入题目...',
             options: [
                 { id: 'A', text: '选项 A' },
@@ -111,61 +194,104 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
         setEditingChallenge({ ...challenge });
     };
 
-    const handleSaveChallenge = () => {
+    const handleSaveChallenge = async () => {
         if (!editingChallenge || !editingChallenge.question || !qbLessonId) {
             showToast('请填写完整题目信息', 'error');
             return;
         }
         
-        setUnits(prev => prev.map(u => {
-            if (u.id !== qbUnitId) return u;
-            return {
-                ...u,
-                lessons: u.lessons.map(l => {
-                    if (l.id !== qbLessonId) return l;
-                    const exists = l.challenges.find(c => c.id === editingChallenge.id);
-                    if (exists) {
-                        return {
-                            ...l,
-                            challenges: l.challenges.map(c => c.id === editingChallenge.id ? (editingChallenge as Challenge) : c)
-                        };
-                    } else {
-                        return {
-                            ...l,
-                            challenges: [...l.challenges, (editingChallenge as Challenge)]
-                        };
-                    }
-                })
-            };
-        }));
-        setEditingChallenge(null);
-        showToast('题目保存成功', 'success');
+        const isNew = !currentLesson?.challenges.find(c => c.id === editingChallenge.id);
+        
+        try {
+            // Save to database using v2 API
+            if (isNew) {
+                // Create new challenge
+                await apiClientV2.createChallengesBatch(qbLessonId, [{
+                    id: editingChallenge.id || `challenge-${Date.now()}`,
+                    type: editingChallenge.type || QuestionType.SINGLE_CHOICE,
+                    question: editingChallenge.question,
+                    correct_answer: editingChallenge.correctAnswer || '',
+                    options: editingChallenge.options || [],
+                    explanation: editingChallenge.explanation || '',
+                    image_url: editingChallenge.imageUrl || ''
+                }]);
+            } else {
+                // Update existing challenge
+                await apiClientV2.updateChallenge(editingChallenge.id!, {
+                    type: editingChallenge.type,
+                    question: editingChallenge.question,
+                    correct_answer: editingChallenge.correctAnswer,
+                    options: editingChallenge.options,
+                    explanation: editingChallenge.explanation,
+                    image_url: editingChallenge.imageUrl
+                });
+            }
+            
+            // Update local state
+            setUnits(prev => prev.map(u => {
+                if (u.id !== qbUnitId) return u;
+                return {
+                    ...u,
+                    lessons: u.lessons.map(l => {
+                        if (l.id !== qbLessonId) return l;
+                        const exists = l.challenges.find(c => c.id === editingChallenge.id);
+                        if (exists) {
+                            return {
+                                ...l,
+                                challenges: l.challenges.map(c => c.id === editingChallenge.id ? (editingChallenge as Challenge) : c)
+                            };
+                        } else {
+                            return {
+                                ...l,
+                                challenges: [...l.challenges, (editingChallenge as Challenge)]
+                            };
+                        }
+                    })
+                };
+            }));
+            // Keep showing the saved challenge instead of clearing
+            // setEditingChallenge(null);
+            showToast('题目保存成功', 'success');
+        } catch (error) {
+            console.error('Failed to save challenge:', error);
+            showToast('保存失败: ' + (error instanceof Error ? error.message : String(error)), 'error');
+        }
     };
 
     const handleDeleteChallenge = (challengeId: string) => {
         setModal({
             title: '删除确认',
             message: '确定要永久删除这道题目吗？',
-            onConfirm: () => {
-                setUnits(prev => prev.map(u => {
-                    if(u.id !== qbUnitId) return u;
-                    return {
-                        ...u,
-                        lessons: u.lessons.map(l => {
-                            if(l.id !== qbLessonId) return l;
-                            return {
-                                ...l,
-                                challenges: l.challenges.filter(c => c.id !== challengeId)
-                            };
-                        })
-                    };
-                }));
-                if (editingChallenge?.id === challengeId) setEditingChallenge(null);
-                const newSet = new Set(selectedQIds);
-                newSet.delete(challengeId);
-                setSelectedQIds(newSet);
-                setModal(null);
-                showToast('题目已删除', 'success');
+            onConfirm: async () => {
+                try {
+                    // Delete from database using v2 API
+                    await apiClientV2.deleteChallenge(challengeId);
+                    
+                    // Update local state
+                    setUnits(prev => prev.map(u => {
+                        if(u.id !== qbUnitId) return u;
+                        return {
+                            ...u,
+                            lessons: u.lessons.map(l => {
+                                if(l.id !== qbLessonId) return l;
+                                return {
+                                    ...l,
+                                    challenges: l.challenges.filter(c => c.id !== challengeId)
+                                };
+                            })
+                        };
+                    }));
+                    if (editingChallenge?.id === challengeId) setEditingChallenge(null);
+                    const newSet = new Set(selectedQIds);
+                    newSet.delete(challengeId);
+                    setSelectedQIds(newSet);
+                    setModal(null);
+                    showToast('题目已删除', 'success');
+                } catch (error) {
+                    console.error('Failed to delete challenge:', error);
+                    showToast('删除失败: ' + (error instanceof Error ? error.message : String(error)), 'error');
+                    setModal(null);
+                }
             }
         });
     };
@@ -189,24 +315,37 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
         if (!challenge.correctAnswer) return '';
         if (challenge.type === QuestionType.FILL_BLANK) return challenge.correctAnswer;
         
-        // For Multiple Choice / True False, find the option text
+        // For Multiple Choice (multi-select), handle comma-separated answers
+        if (challenge.type === QuestionType.MULTIPLE_CHOICE) {
+            const answerIds = challenge.correctAnswer.split(',');
+            const answerTexts = answerIds.map(id => {
+                const option = challenge.options?.find(o => o.id === id);
+                return option ? option.text : id;
+            });
+            return answerTexts.join(', ');
+        }
+        
+        // For Single Choice / True False, find the option text
         const option = challenge.options?.find(o => o.id === challenge.correctAnswer);
         return option ? option.text : challenge.correctAnswer;
     };
 
+    // Ensure AI config is loaded per user
     const handleSingleGenImage = async () => {
         if (!editingChallenge || !editingChallenge.question) return;
         setIsImageGenLoading(true);
-        
-        const answerText = getAnswerText(editingChallenge);
-        // Pass both question and answer context
-        const img = await generateImageForText(editingChallenge.question, answerText);
-        
-        if (img) {
-            setEditingChallenge({ ...editingChallenge, imageUrl: img });
-            showToast('配图生成成功', 'success');
-        } else {
-            showToast('配图生成失败，请重试', 'error');
+        try {
+            const answerText = getAnswerText(editingChallenge);
+            // Always pass userId for personalized config
+            const img = await generateImageForText(editingChallenge.question, answerText, userId);
+            if (img) {
+                setEditingChallenge({ ...editingChallenge, imageUrl: img });
+                showToast('配图生成成功', 'success');
+            } else {
+                showToast('配图生成失败，请重试', 'error');
+            }
+        } catch (e) {
+            showToast('配图生成失败: ' + (e instanceof Error ? e.message : String(e)), 'error');
         }
         setIsImageGenLoading(false);
     };
@@ -215,7 +354,8 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
         if (!editingChallenge || !editingChallenge.question) return;
         setIsOptionGenLoading(true);
         try {
-            const options = await generateOptionsForQuestion(editingChallenge.question, editingChallenge.type || QuestionType.MULTIPLE_CHOICE);
+            // Always pass userId for personalized config
+            const options = await generateOptionsForQuestion(editingChallenge.question, editingChallenge.type || QuestionType.SINGLE_CHOICE, userId);
             if (options && options.length > 0) {
                 setEditingChallenge(prev => ({
                     ...prev!,
@@ -256,11 +396,21 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
                     // Extract answer context for batch items
                     const answerText = getAnswerText(task);
                     
-                    const img = await generateImageForText(task.question, answerText);
+                    const img = await generateImageForText(task.question, answerText, userId);
                     
                     if (img) {
                         successCount++;
-                        addLog(`✅ 生成成功`);
+                        addLog(`✅ 生成成功，保存中...`);
+                        
+                        // Use v2 API to save image directly to database
+                        try {
+                            await apiClientV2.updateChallenge(task.id, { image_url: img });
+                            addLog(`💾 已保存到数据库`);
+                        } catch (saveError) {
+                            addLog(`⚠️ 保存失败，仅更新本地: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+                        }
+                        
+                        // Update local state (without triggering old API)
                         setUnits(prev => prev.map(u => {
                             if (u.id !== qbUnitId) return u;
                             return {
@@ -452,6 +602,11 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
                       <div className="space-y-2 pb-4">
                           {!qbLessonId ? (
                               <div className="text-center text-gray-400 py-10 text-sm">请先选择小节</div>
+                          ) : isLoadingChallenges ? (
+                              <div className="text-center py-10">
+                                  <Loader2 size={24} className="animate-spin text-orange-500 mx-auto mb-2" />
+                                  <div className="text-gray-400 text-sm">加载题目中...</div>
+                              </div>
                           ) : currentLesson?.challenges.length === 0 ? (
                               <div className="text-center text-gray-400 py-10 text-sm">暂无题目</div>
                           ) : (
@@ -528,7 +683,8 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
                                     value={editingChallenge.type}
                                     onChange={(e) => setEditingChallenge({ ...editingChallenge, type: e.target.value as QuestionType })}
                                   >
-                                      <option value="MULTIPLE_CHOICE">单项选择题</option>
+                                      <option value="SINGLE_CHOICE">单项选择题</option>
+                                      <option value="MULTIPLE_CHOICE">多项选择题（多选）</option>
                                       <option value="TRUE_FALSE">判断题</option>
                                       <option value="FILL_BLANK">填空题</option>
                                   </select>
@@ -603,40 +759,81 @@ export default function AdminQuestionBank({ units, setUnits }: AdminQuestionBank
                                           </button>
                                       </div>
                                   </div>
-                                  {editingChallenge.options?.map((opt, idx) => (
-                                      <div key={idx} className="flex gap-2 items-center">
-                                          <div className="w-8 h-8 flex items-center justify-center bg-white border rounded font-bold text-gray-500 text-xs">
-                                              {opt.id}
+                                  {editingChallenge.options?.map((opt, idx) => {
+                                      const isMultipleChoice = editingChallenge.type === 'MULTIPLE_CHOICE';
+                                      const correctAnswers = editingChallenge.correctAnswer?.split(',') || [];
+                                      const isChecked = isMultipleChoice 
+                                          ? correctAnswers.includes(opt.id)
+                                          : editingChallenge.correctAnswer === opt.id;
+                                      
+                                      return (
+                                          <div key={idx} className="flex gap-2 items-center">
+                                              <div className="w-8 h-8 flex items-center justify-center bg-white border rounded font-bold text-gray-500 text-xs">
+                                                  {opt.id}
+                                              </div>
+                                              <input 
+                                                type="text" 
+                                                className="flex-1 p-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
+                                                value={opt.text}
+                                                onChange={(e) => {
+                                                    const newOpts = [...(editingChallenge.options || [])];
+                                                    newOpts[idx].text = e.target.value;
+                                                    setEditingChallenge({ ...editingChallenge, options: newOpts });
+                                                }}
+                                              />
+                                              {isMultipleChoice ? (
+                                                  <input 
+                                                    type="checkbox" 
+                                                    checked={isChecked}
+                                                    onChange={(e) => {
+                                                        let newAnswers = [...correctAnswers];
+                                                        if (e.target.checked) {
+                                                            if (!newAnswers.includes(opt.id)) {
+                                                                newAnswers.push(opt.id);
+                                                            }
+                                                        } else {
+                                                            newAnswers = newAnswers.filter(a => a !== opt.id);
+                                                        }
+                                                        // 按字母排序
+                                                        newAnswers.sort();
+                                                        setEditingChallenge({ ...editingChallenge, correctAnswer: newAnswers.join(',') });
+                                                    }}
+                                                    className="w-4 h-4 text-green-600 rounded"
+                                                  />
+                                              ) : (
+                                                  <input 
+                                                    type="radio" 
+                                                    name="correctAnswer"
+                                                    checked={isChecked}
+                                                    onChange={() => setEditingChallenge({ ...editingChallenge, correctAnswer: opt.id })}
+                                                    className="w-4 h-4 text-green-600"
+                                                  />
+                                              )}
+                                              <button 
+                                                onClick={() => {
+                                                    const newOpts = editingChallenge.options?.filter((_, i) => i !== idx);
+                                                    // 如果删除的选项是正确答案之一，也要更新 correctAnswer
+                                                    let newCorrectAnswer = editingChallenge.correctAnswer;
+                                                    if (isMultipleChoice) {
+                                                        const answers = correctAnswers.filter(a => a !== opt.id);
+                                                        newCorrectAnswer = answers.join(',');
+                                                    } else if (editingChallenge.correctAnswer === opt.id) {
+                                                        newCorrectAnswer = '';
+                                                    }
+                                                    setEditingChallenge({ ...editingChallenge, options: newOpts, correctAnswer: newCorrectAnswer });
+                                                }}
+                                                className="text-gray-400 hover:text-red-500"
+                                              >
+                                                  <X size={16}/>
+                                              </button>
                                           </div>
-                                          <input 
-                                            type="text" 
-                                            className="flex-1 p-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
-                                            value={opt.text}
-                                            onChange={(e) => {
-                                                const newOpts = [...(editingChallenge.options || [])];
-                                                newOpts[idx].text = e.target.value;
-                                                setEditingChallenge({ ...editingChallenge, options: newOpts });
-                                            }}
-                                          />
-                                          <input 
-                                            type="radio" 
-                                            name="correctAnswer"
-                                            checked={editingChallenge.correctAnswer === opt.id}
-                                            onChange={() => setEditingChallenge({ ...editingChallenge, correctAnswer: opt.id })}
-                                            className="w-4 h-4 text-green-600"
-                                          />
-                                          <button 
-                                            onClick={() => {
-                                                const newOpts = editingChallenge.options?.filter((_, i) => i !== idx);
-                                                setEditingChallenge({ ...editingChallenge, options: newOpts });
-                                            }}
-                                            className="text-gray-400 hover:text-red-500"
-                                          >
-                                              <X size={16}/>
-                                          </button>
-                                      </div>
-                                  ))}
-                                  <p className="text-xs text-gray-400 mt-1">* 选中单选框以标记正确答案</p>
+                                      );
+                                  })}
+                                  <p className="text-xs text-gray-400 mt-1">
+                                      {editingChallenge.type === 'MULTIPLE_CHOICE' 
+                                          ? '* 勾选复选框以标记正确答案（可多选）' 
+                                          : '* 选中单选框以标记正确答案'}
+                                  </p>
                               </div>
                           )}
 

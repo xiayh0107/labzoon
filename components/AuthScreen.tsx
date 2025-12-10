@@ -151,6 +151,20 @@ export default function AuthScreen() {
             <button onClick={() => setMode('terms')} className="underline hover:text-gray-600">服务条款</button>
         </p>
       </div>
+
+      <footer className="mt-12 text-center text-xs text-gray-400">
+          <div className="flex flex-col items-center gap-1">
+              <p>© 2025 LabZoon实验动物学</p>
+              <a 
+                  href="https://beian.miit.gov.cn/" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="hover:text-gray-600 transition-colors"
+              >
+                  湘ICP备2025149156号-1
+              </a>
+          </div>
+      </footer>
     </div>
   );
 }

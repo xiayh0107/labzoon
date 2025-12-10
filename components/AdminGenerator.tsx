@@ -1,8 +1,9 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Sparkles, Loader2, FileText, Image as ImageIcon, Trash2, Upload, AlertTriangle, List, PlusCircle, X, Save, Layers } from 'lucide-react';
+import { Sparkles, Loader2, FileText, Image as ImageIcon, Trash2, Upload, AlertTriangle, List, PlusCircle, X, Save, Layers, CheckCircle2 } from 'lucide-react';
 import { Unit, Challenge, QuestionType, KnowledgeItem } from '../types';
-import { fileToGenerativePart, generateQuizQuestions, generateStructuredCourseContent, checkDuplicate, fileToBase64, StructuredUnit } from '../api';
+import { fileToGenerativePart, generateQuizQuestions, generateStructuredCourseContent, checkDuplicate, fileToBase64, StructuredUnit, getAIConfig } from '../api';
+import { apiClient, apiClientV2 } from '../apiClient';
 
 interface AdminGeneratorProps {
     units: Unit[];
@@ -12,9 +13,11 @@ interface AdminGeneratorProps {
     onKnowledgeBaseAction?: (action: 'add' | 'delete' | 'set', item?: KnowledgeItem) => void;
     initialLibraryId?: string;
     onResetLibrarySelection: () => void;
+    userId?: string; // 新增：用户ID，用于后台任务
+    onTaskCreated?: (taskId: string, type: 'questions' | 'structure') => void; // 新增：任务创建回调
 }
 
-export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnowledgeBase, onKnowledgeBaseAction, initialLibraryId, onResetLibrarySelection }: AdminGeneratorProps) {
+export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnowledgeBase, onKnowledgeBaseAction, initialLibraryId, onResetLibrarySelection, userId, onTaskCreated }: AdminGeneratorProps) {
     // -- Input State --
     const [inputSource, setInputSource] = useState<'new' | 'library'>('new');
     const [selectedLibraryId, setSelectedLibraryId] = useState<string>('');
@@ -32,6 +35,7 @@ export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnow
     const [isGenerating, setIsGenerating] = useState(false);
     const [loadingStep, setLoadingStep] = useState<string>(''); // Detailed loading text
     const [generatedChallenges, setGeneratedChallenges] = useState<Challenge[]>([]);
+    const [taskSubmitted, setTaskSubmitted] = useState(false); // 新增：任务已提交标记
 
     // -- Target State --
     const [selectedUnitId, setSelectedUnitId] = useState(units[0]?.id || '');
@@ -90,80 +94,186 @@ export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnow
             }
         }
     
-        setIsGenerating(true);
-        setLoadingStep('正在连接 AI 大脑...');
-        setGeneratedChallenges([]);
-    
-        try {
-            if (useSmartStructure && inputMode === 'text') {
-                // --- Smart Structure Path ---
-                setLoadingStep('AI 正在分析文本结构 (识别章节和小节)...');
-                
-                // Add context to prompt if using library/new text
-                const prompt = inputSource === 'library' 
-                    ? finalPromptText 
-                    : finalPromptText;
+        // 获取AI配置
+        const aiConfig = await getAIConfig(userId);
+        
+        // 检查是否可以使用后台任务模式（有userId且不是图片模式）
+        const canUseBackgroundTask = userId && !finalImagePart;
 
-                const structuredUnits: StructuredUnit[] = await generateStructuredCourseContent(prompt);
-                
-                if (!structuredUnits || structuredUnits.length === 0) {
-                    throw new Error("AI 返回了空结果，请检查内容是否足够丰富或重试。");
+        if (canUseBackgroundTask) {
+            // === 后台任务模式 ===
+            setIsGenerating(true);
+            setLoadingStep('正在提交任务到后台...');
+            setTaskSubmitted(false);
+
+            try {
+                if (useSmartStructure && inputMode === 'text') {
+                    // 结构化生成任务
+                    const { taskId } = await apiClient.createGenerateStructureTask(
+                        userId,
+                        finalPromptText,
+                        aiConfig.systemPromptStructure || '',
+                        aiConfig,
+                        contentTitle || '智能结构化生成'
+                    );
+                    
+                    setTaskSubmitted(true);
+                    setLoadingStep('任务已提交！AI 正在后台处理，完成后会自动通知您。');
+                    
+                    // 通知父组件任务已创建
+                    if (onTaskCreated) {
+                        onTaskCreated(taskId, 'structure');
+                    }
+                    
+                    // 保存到知识库
+                    if (inputSource === 'new' && saveToKb && !duplicateItem) {
+                        const newItem: KnowledgeItem = {
+                            id: `kb-${Date.now()}`,
+                            title: contentTitle || textContent.slice(0, 15) + '...',
+                            content: textContent,
+                            type: 'text',
+                            createdAt: Date.now()
+                        };
+                        if (onKnowledgeBaseAction) {
+                            onKnowledgeBaseAction('add', newItem);
+                        } else {
+                            setKnowledgeBase(prev => [newItem, ...prev]);
+                        }
+                    }
+
+                    // 清空输入
+                    setTimeout(() => {
+                        setIsGenerating(false);
+                        setLoadingStep('');
+                        setTextContent('');
+                        setContentTitle('');
+                    }, 2000);
+
+                } else {
+                    // 题目生成任务
+                    const promptPrefix = '请根据以下内容生成题目:\n';
+                    const { taskId } = await apiClient.createGenerateQuestionsTask(
+                        userId,
+                        `${promptPrefix}${finalPromptText}`,
+                        aiConfig.systemPromptText || '',
+                        aiConfig,
+                        contentTitle || '生成题目'
+                    );
+                    
+                    setTaskSubmitted(true);
+                    setLoadingStep('任务已提交！AI 正在后台处理，完成后会自动通知您。');
+                    
+                    // 通知父组件任务已创建
+                    if (onTaskCreated) {
+                        onTaskCreated(taskId, 'questions');
+                    }
+
+                    // 保存到知识库
+                    if (inputSource === 'new' && saveToKb && !duplicateItem) {
+                        const newItem: KnowledgeItem = {
+                            id: `kb-${Date.now()}`,
+                            title: contentTitle || textContent.slice(0, 15) + '...',
+                            content: textContent,
+                            type: 'text',
+                            createdAt: Date.now()
+                        };
+                        if (onKnowledgeBaseAction) {
+                            onKnowledgeBaseAction('add', newItem);
+                        } else {
+                            setKnowledgeBase(prev => [newItem, ...prev]);
+                        }
+                    }
+
+                    // 清空输入
+                    setTimeout(() => {
+                        setIsGenerating(false);
+                        setLoadingStep('');
+                        setTextContent('');
+                        setContentTitle('');
+                    }, 2000);
                 }
-
-                setLoadingStep(`识别成功！正在创建 ${structuredUnits.length} 个章节...`);
-
-                // Convert structured response to App Units
-                const colors = ['green', 'blue', 'purple', 'orange', 'rose', 'teal', 'yellow', 'indigo'];
-                const timestamp = Date.now();
-
-                const newUnits: Unit[] = structuredUnits.map((su, uIdx) => ({
-                    id: `auto-unit-${timestamp}-${uIdx}`,
-                    title: su.title,
-                    description: su.description || 'AI 自动生成',
-                    color: colors[uIdx % colors.length],
-                    lessons: su.lessons.map((sl, lIdx) => ({
-                        id: `auto-lesson-${timestamp}-${uIdx}-${lIdx}`,
-                        title: sl.title,
-                        completed: false,
-                        locked: false,
-                        stars: 0,
-                        challenges: sl.challenges.map((ch, cIdx) => ({
-                            ...ch,
-                            id: `auto-ch-${timestamp}-${uIdx}-${lIdx}-${cIdx}`
-                        }))
-                    }))
-                }));
-
-                // Append to Units
-                setUnits(prev => [...prev, ...newUnits]);
-                setLoadingStep('完成！');
-                alert(`结构化导入成功！已自动创建 ${newUnits.length} 个章节和对应的小节与题目。`);
-
-            } else {
-                // --- Traditional Question Generation Path ---
-                setLoadingStep('AI 正在根据内容编写题目...');
-                
-                const promptPrefix = inputMode === 'text' 
-                    ? `请根据以下内容生成题目:\n` 
-                    : `请分析这张图片中的医学知识点，并生成题目。`;
-                
-                const questions = await generateQuizQuestions(
-                    inputMode === 'text' ? `${promptPrefix}${finalPromptText}` : promptPrefix, 
-                    finalImagePart
-                );
-                
-                setGeneratedChallenges(questions);
-                if (questions.length === 0) {
-                    throw new Error("未能生成题目，请重试");
-                }
+            } catch (error: any) {
+                console.error(error);
+                const msg = error.message || '提交任务失败，请重试。';
+                alert(`错误: ${msg}`);
+                setIsGenerating(false);
+                setLoadingStep('');
             }
-        } catch (error: any) {
-          console.error(error);
-          const msg = error.message || '生成失败，请重试。可能内容过长或网络超时。';
-          alert(`错误: ${msg}`);
-        } finally {
-          setIsGenerating(false);
-          setLoadingStep('');
+
+        } else {
+            // === 前端直接执行模式 (图片模式或无userId时的降级方案) ===
+            setIsGenerating(true);
+            setLoadingStep('正在连接 AI 大脑...');
+            setGeneratedChallenges([]);
+            setTaskSubmitted(false);
+        
+            try {
+                if (useSmartStructure && inputMode === 'text') {
+                    // --- Smart Structure Path (前端执行) ---
+                    setLoadingStep('AI 正在分析文本结构 (识别章节和小节)...');
+                    
+                    const structuredUnits: StructuredUnit[] = await generateStructuredCourseContent(finalPromptText, userId);
+                    
+                    if (!structuredUnits || structuredUnits.length === 0) {
+                        throw new Error("AI 返回了空结果，请检查内容是否足够丰富或重试。");
+                    }
+
+                    setLoadingStep(`识别成功！正在创建 ${structuredUnits.length} 个章节...`);
+
+                    // Convert structured response to App Units
+                    const colors = ['green', 'blue', 'purple', 'orange', 'rose', 'teal', 'yellow', 'indigo'];
+                    const timestamp = Date.now();
+
+                    const newUnits: Unit[] = structuredUnits.map((su, uIdx) => ({
+                        id: `auto-unit-${timestamp}-${uIdx}`,
+                        title: su.title,
+                        description: su.description || 'AI 自动生成',
+                        color: colors[uIdx % colors.length],
+                        lessons: su.lessons.map((sl, lIdx) => ({
+                            id: `auto-lesson-${timestamp}-${uIdx}-${lIdx}`,
+                            title: sl.title,
+                            completed: false,
+                            locked: false,
+                            stars: 0,
+                            challenges: sl.challenges.map((ch, cIdx) => ({
+                                ...ch,
+                                id: `auto-ch-${timestamp}-${uIdx}-${lIdx}-${cIdx}`
+                            }))
+                        }))
+                    }));
+
+                    // Append to Units
+                    setUnits(prev => [...prev, ...newUnits]);
+                    setLoadingStep('完成！');
+                    alert(`结构化导入成功！已自动创建 ${newUnits.length} 个章节和对应的小节与题目。`);
+
+                } else {
+                    // --- Traditional Question Generation Path ---
+                    setLoadingStep('AI 正在根据内容编写题目...');
+                    
+                    const promptPrefix = inputMode === 'text' 
+                        ? `请根据以下内容生成题目:\n` 
+                        : `请分析这张图片中的医学知识点，并生成题目。`;
+                    
+                    const questions = await generateQuizQuestions(
+                        inputMode === 'text' ? `${promptPrefix}${finalPromptText}` : promptPrefix, 
+                        finalImagePart,
+                        userId
+                    );
+                    
+                    setGeneratedChallenges(questions);
+                    if (questions.length === 0) {
+                        throw new Error("未能生成题目，请重试");
+                    }
+                }
+            } catch (error: any) {
+                console.error(error);
+                const msg = error.message || '生成失败，请重试。可能内容过长或网络超时。';
+                alert(`错误: ${msg}`);
+            } finally {
+                setIsGenerating(false);
+                setLoadingStep('');
+            }
         }
     };
 
@@ -214,50 +324,54 @@ export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnow
         alert(`成功创建了 ${newUnits.length} 个新章节！`);
     };
 
-    const saveToLesson = (lessonId: string) => {
+    const saveToLesson = async (lessonId: string) => {
         if (generatedChallenges.length === 0) return;
-        setUnits(prev => prev.map(u => {
-          if (u.id === selectedUnitId) {
-            return {
-              ...u,
-              lessons: u.lessons.map(l => {
-                if (l.id === lessonId) {
-                  return { ...l, challenges: [...l.challenges, ...generatedChallenges] };
+        
+        try {
+            // 使用 v2 API 批量保存题目到数据库
+            const formattedChallenges = generatedChallenges.map((ch, idx) => ({
+                id: ch.id || `challenge-${Date.now()}-${idx}`,
+                type: ch.type,
+                question: ch.question,
+                correct_answer: ch.correctAnswer,
+                options: ch.options,
+                explanation: ch.explanation,
+                image_url: ch.imageUrl
+            }));
+
+            await apiClientV2.createChallengesBatch(lessonId, formattedChallenges);
+    
+            // Save to Knowledge Base using the new handler
+            if (inputSource === 'new' && saveToKb && !duplicateItem) {
+                const newItem: KnowledgeItem = {
+                    id: `kb-${Date.now()}`,
+                    title: contentTitle || (inputMode === 'text' ? textContent.slice(0, 15) + '...' : '上传图片'),
+                    content: inputMode === 'text' ? textContent : 'Image Content',
+                    type: inputMode,
+                    createdAt: Date.now(),
+                    imageData: imagePreview || undefined
+                };
+                
+                // Use the prop callback if available (DB sync), otherwise fallback to local set
+                if (onKnowledgeBaseAction) {
+                    onKnowledgeBaseAction('add', newItem);
+                } else {
+                    setKnowledgeBase(prev => [newItem, ...prev]);
                 }
-                return l;
-              })
-            };
-          }
-          return u;
-        }));
-    
-        // Save to Knowledge Base using the new handler
-        if (inputSource === 'new' && saveToKb && !duplicateItem) {
-            const newItem: KnowledgeItem = {
-                id: `kb-${Date.now()}`,
-                title: contentTitle || (inputMode === 'text' ? textContent.slice(0, 15) + '...' : '上传图片'),
-                content: inputMode === 'text' ? textContent : 'Image Content',
-                type: inputMode,
-                createdAt: Date.now(),
-                imageData: imagePreview || undefined
-            };
-            
-            // Use the prop callback if available (DB sync), otherwise fallback to local set
-            if (onKnowledgeBaseAction) {
-                onKnowledgeBaseAction('add', newItem);
-            } else {
-                setKnowledgeBase(prev => [newItem, ...prev]);
             }
+        
+            setGeneratedChallenges([]);
+            if (inputSource === 'new') {
+                setTextContent('');
+                setImageFile(null);
+                setImagePreview(null);
+                setContentTitle('');
+            }
+            alert(`✅ ${formattedChallenges.length} 道题目已成功保存到数据库！`);
+        } catch (error: any) {
+            console.error('Failed to save challenges:', error);
+            alert(`保存失败: ${error.message}`);
         }
-    
-        setGeneratedChallenges([]);
-        if (inputSource === 'new') {
-            setTextContent('');
-            setImageFile(null);
-            setImagePreview(null);
-            setContentTitle('');
-        }
-        alert('题目已成功添加到课程中！');
     };
 
     return (
@@ -267,13 +381,27 @@ export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnow
             {isGenerating && (
                 <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center animate-in fade-in duration-300">
                     <div className="relative">
-                        <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 rounded-full blur-xl opacity-20 animate-pulse"></div>
-                        <Loader2 size={64} className="text-blue-600 animate-spin relative z-10" />
+                        {taskSubmitted ? (
+                            <>
+                                <div className="absolute inset-0 bg-gradient-to-r from-green-400 to-emerald-500 rounded-full blur-xl opacity-20 animate-pulse"></div>
+                                <CheckCircle2 size={64} className="text-green-600 relative z-10" />
+                            </>
+                        ) : (
+                            <>
+                                <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 rounded-full blur-xl opacity-20 animate-pulse"></div>
+                                <Loader2 size={64} className="text-blue-600 animate-spin relative z-10" />
+                            </>
+                        )}
                     </div>
-                    <h3 className="mt-6 text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
-                        AI 正在工作中
+                    <h3 className={`mt-6 text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r ${taskSubmitted ? 'from-green-600 to-emerald-600' : 'from-blue-600 to-purple-600'}`}>
+                        {taskSubmitted ? '任务已提交' : 'AI 正在工作中'}
                     </h3>
                     <p className="mt-2 text-gray-500 font-medium animate-pulse">{loadingStep}</p>
+                    {taskSubmitted && (
+                        <p className="mt-4 text-sm text-gray-400">
+                            您可以在左侧「任务管理器」中查看进度
+                        </p>
+                    )}
                 </div>
             )}
 
@@ -521,7 +649,9 @@ export default function AdminGenerator({ units, setUnits, knowledgeBase, setKnow
                                 <div className="flex gap-2 mb-2">
                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
                                         q.type === 'MULTIPLE_CHOICE' ? 'bg-purple-100 text-purple-600' : 
-                                        q.type === 'TRUE_FALSE' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'
+                                        q.type === 'TRUE_FALSE' ? 'bg-orange-100 text-orange-600' : 
+                                        q.type === 'SINGLE_CHOICE' ? 'bg-blue-100 text-blue-600' :
+                                        q.type === 'FILL_BLANK' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600'
                                     }`}>{q.type}</span>
                                 </div>
                                 <p className="font-bold text-gray-800 text-sm mb-3">{q.question}</p>

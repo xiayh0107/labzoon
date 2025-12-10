@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Home, Settings, User, Trophy } from 'lucide-react';
+import { Home, Settings, User, Trophy, BookOpen } from 'lucide-react';
 
 interface SidebarProps {
     activeTab: string;
@@ -28,6 +28,7 @@ export default function Sidebar({ activeTab, setActiveTab, isAdmin = false }: Si
         </div>
         
         <NavButton label="学习" icon={<Home size={24} />} active={activeTab === 'learn'} onClick={() => setActiveTab('learn')} />
+        <NavButton label="我的题库" icon={<BookOpen size={24} />} active={activeTab === 'mybanks'} onClick={() => setActiveTab('mybanks')} />
         <NavButton label="排行榜" icon={<Trophy size={24} />} active={activeTab === 'leaderboard'} onClick={() => setActiveTab('leaderboard')} />
         
         {isAdmin && (

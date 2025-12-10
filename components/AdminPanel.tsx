@@ -1,12 +1,14 @@
 
-import React, { useState } from 'react';
-import { Zap, Briefcase, Library, Sparkles, Settings as SettingsIcon, Users } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { Zap, Briefcase, Library, Sparkles, Settings as SettingsIcon, Users, Database, Table2 } from 'lucide-react';
 import { Unit, KnowledgeItem } from '../types';
 import AdminGenerator from './AdminGenerator';
 import AdminQuestionBank from './AdminQuestionBank';
 import AdminLibrary from './AdminLibrary';
 import AdminAISettings from './AdminAISettings';
 import AdminUserManagement from './AdminUserManagement';
+import DataBackupPanel from './DataBackupPanel';
+import AdminTableView from './AdminTableView';
 
 interface AdminPanelProps {
     units: Unit[];
@@ -14,10 +16,12 @@ interface AdminPanelProps {
     knowledgeBase: KnowledgeItem[];
     setKnowledgeBase: React.Dispatch<React.SetStateAction<KnowledgeItem[]>>;
     onKnowledgeBaseAction?: (action: 'add' | 'delete' | 'set', item?: KnowledgeItem) => void;
+    userId?: string; // 新增：用户ID，用于后台任务
+    onTaskCreated?: (taskId: string, type: 'questions' | 'structure') => void; // 新增：任务创建回调
 }
 
-export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledgeBase, onKnowledgeBaseAction }: AdminPanelProps) {
-  const [adminMode, setAdminMode] = useState<'generate' | 'library' | 'questions' | 'settings' | 'users'>('generate');
+export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledgeBase, onKnowledgeBaseAction, userId, onTaskCreated }: AdminPanelProps) {
+  const [adminMode, setAdminMode] = useState<'generate' | 'library' | 'questions' | 'settings' | 'users' | 'backup' | 'table'>('generate');
   const [selectedLibraryItem, setSelectedLibraryItem] = useState<string | undefined>(undefined);
 
   const handleUseLibraryItem = (item: KnowledgeItem) => {
@@ -47,6 +51,12 @@ export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledg
                 <Briefcase size={16} /> 题库管理
             </button>
             <button 
+                onClick={() => setAdminMode('table')}
+                className={`px-4 py-2 rounded-lg font-bold text-sm flex gap-2 items-center whitespace-nowrap ${adminMode === 'table' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}
+            >
+                <Table2 size={16} /> 表格管理
+            </button>
+            <button 
                 onClick={() => setAdminMode('library')}
                 className={`px-4 py-2 rounded-lg font-bold text-sm flex gap-2 items-center whitespace-nowrap ${adminMode === 'library' ? 'bg-white shadow text-purple-600' : 'text-gray-500'}`}
             >
@@ -64,6 +74,12 @@ export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledg
             >
                 <Users size={16} /> 权限管理
             </button>
+            <button 
+                onClick={() => setAdminMode('backup')}
+                className={`px-4 py-2 rounded-lg font-bold text-sm flex gap-2 items-center whitespace-nowrap ${adminMode === 'backup' ? 'bg-white shadow text-purple-600' : 'text-gray-500'}`}
+            >
+                <Database size={16} /> 数据备份
+            </button>
         </div>
       </div>
 
@@ -78,6 +94,8 @@ export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledg
             onKnowledgeBaseAction={onKnowledgeBaseAction}
             initialLibraryId={selectedLibraryItem}
             onResetLibrarySelection={() => setSelectedLibraryItem(undefined)}
+            userId={userId}
+            onTaskCreated={onTaskCreated}
           />
       )}
 
@@ -85,6 +103,17 @@ export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledg
           <AdminQuestionBank 
             units={units}
             setUnits={setUnits}
+            userId={userId}
+          />
+      )}
+
+      {adminMode === 'table' && (
+          <AdminTableView 
+            units={units}
+            onRefresh={() => {
+              // Trigger refresh of units data
+              window.location.reload();
+            }}
           />
       )}
 
@@ -98,11 +127,15 @@ export default function AdminPanel({ units, setUnits, knowledgeBase, setKnowledg
       )}
 
       {adminMode === 'settings' && (
-          <AdminAISettings />
+          <AdminAISettings userId={userId} />
       )}
       
       {adminMode === 'users' && (
           <AdminUserManagement />
+      )}
+
+      {adminMode === 'backup' && (
+          <DataBackupPanel />
       )}
       
     </div>

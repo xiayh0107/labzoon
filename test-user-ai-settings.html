@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI设置持久化测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .test-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0069d9;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        label {
+            display: block;
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI设置持久化测试</h1>
+    <p>此页面用于测试普通用户的AI设置是否能正确保存和加载。</p>
+
+    <div class="test-section">
+        <h2>测试1: 用户认证状态</h2>
+        <button onclick="checkAuthStatus()">检查认证状态</button>
+        <div id="auth-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>测试2: 加载现有设置</h2>
+        <button onclick="loadSettings()">加载AI设置</button>
+        <div id="load-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>测试3: 保存新设置</h2>
+        <label for="provider">提供商:</label>
+        <select id="provider">
+            <option value="google">Google Gemini</option>
+            <option value="openai">OpenAI</option>
+        </select>
+
+        <label for="apiKey">API Key:</label>
+        <input type="password" id="apiKey" placeholder="输入您的API Key">
+
+        <label for="baseUrl">Base URL (可选):</label>
+        <input type="text" id="baseUrl" placeholder="如: https://api.openai.com/v1">
+
+        <label for="textModel">文本模型:</label>
+        <input type="text" id="textModel" placeholder="如: gemini-2.5-flash">
+
+        <label for="temperature">温度 (0-1):</label>
+        <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7">
+
+        <button onclick="saveSettings()">保存设置</button>
+        <div id="save-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>测试4: 刷新后验证设置</h2>
+        <p>保存设置后，请刷新页面，然后再次点击"加载AI设置"按钮，验证设置是否正确保存。</p>
+        <button onclick="location.reload()">刷新页面</button>
+    </div>
+
+    <script>
+        // 使用前端API客户端
+        const API_BASE = window.location.hostname === 'localhost' 
+            ? 'http://localhost:3001' 
+            : '/api';
+
+        // 获取认证令牌
+        async function getAuthToken() {
+            try {
+                const response = await fetch(`${API_BASE}/auth/status`, { 
+                    credentials: 'include' 
+                });
+                const data = await response.json();
+                if (data.user) {
+                    return data.token; // 假设返回包含token
+                }
+                return null;
+            } catch (error) {
+                console.error('获取令牌失败:', error);
+                return null;
+            }
+        }
+
+        // 检查用户认证状态
+        async function checkAuthStatus() {
+            const resultDiv = document.getElementById('auth-result');
+            
+            try {
+                const response = await fetch(`${API_BASE}/auth/status`, { 
+                    credentials: 'include' 
+                });
+                const data = await response.json();
+                
+                if (data.user) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ 已认证用户: ${data.user.email} (ID: ${data.user.id})</div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">❌ 未认证，请先登录</div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">❌ 检查认证状态失败: ${error.message}</div>
+                `;
+            }
+        }
+
+        // 加载用户AI设置
+        async function loadSettings() {
+            const resultDiv = document.getElementById('load-result');
+            resultDiv.innerHTML = '<div class="info">加载中...</div>';
+            
+            try {
+                const token = await getAuthToken();
+                if (!token) {
+                    resultDiv.innerHTML = '<div class="error">❌ 未认证，请先登录</div>';
+                    return;
+                }
+
+                const response = await fetch(`${API_BASE}/user/ai-settings`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.data) {
+                    const settings = data.data;
+                    // 填充表单
+                    document.getElementById('provider').value = settings.provider || 'google';
+                    document.getElementById('apiKey').value = settings.api_key || '';
+                    document.getElementById('baseUrl').value = settings.base_url || '';
+                    document.getElementById('textModel').value = settings.text_model || '';
+                    document.getElementById('temperature').value = settings.temperature || 0.7;
+                    
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ 成功加载设置</div>
+                        <div class="info">提供商: ${settings.provider}</div>
+                        <div class="info">API Key: ${settings.api_key ? '已设置' : '未设置'}</div>
+                        <div class="info">Base URL: ${settings.base_url || '未设置'}</div>
+                        <div class="info">文本模型: ${settings.text_model || '未设置'}</div>
+                        <div class="info">最后更新: ${new Date(settings.updated_at).toLocaleString()}</div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = '<div class="info">ℹ️ 未找到已保存的设置</div>';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ 加载失败: ${error.message}</div>`;
+            }
+        }
+
+        // 保存用户AI设置
+        async function saveSettings() {
+            const resultDiv = document.getElementById('save-result');
+            resultDiv.innerHTML = '<div class="info">保存中...</div>';
+            
+            try {
+                const token = await getAuthToken();
+                if (!token) {
+                    resultDiv.innerHTML = '<div class="error">❌ 未认证，请先登录</div>';
+                    return;
+                }
+
+                const settings = {
+                    provider: document.getElementById('provider').value,
+                    api_key: document.getElementById('apiKey').value,
+                    base_url: document.getElementById('baseUrl').value,
+                    text_model: document.getElementById('textModel').value,
+                    temperature: parseFloat(document.getElementById('temperature').value)
+                };
+
+                const response = await fetch(`${API_BASE}/user/ai-settings`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(settings)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="success">✅ 设置保存成功！</div>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ 保存失败</div>';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ 保存失败: ${error.message}</div>`;
+            }
+        }
+
+        // 页面加载时检查认证状态
+        window.addEventListener('DOMContentLoaded', () => {
+            checkAuthStatus();
+        });
+    </script>
+</body>
+</html>

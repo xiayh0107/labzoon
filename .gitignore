@@ -40,3 +40,61 @@ lerna-debug.log*
 # Misc
 *.pem
 *.key
+
+# Temporary files and directories
+*.tmp
+*.temp
+.cache/
+.temp/
+.trae/
+
+# Archive files
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Backup files
+*.bak
+*.backup
+
+# Offline data
+labzoon-offline/
+xiayh17.top_nginx/
+
+# Script files that might contain sensitive data
+migrate-to-v2.js
+check-db.js
+package_offline.sh
+metadata.json
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity

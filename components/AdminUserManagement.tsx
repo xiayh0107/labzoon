@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { apiClient } from '../apiClient';
 import { supabase } from '../supabase';
 import { Users, Trash2, Plus, ShieldCheck, Mail, Loader2 } from 'lucide-react';
 
@@ -24,9 +25,11 @@ export default function AdminUserManagement() {
 
     const fetchAdmins = async () => {
         setLoading(true);
-        const { data, error } = await supabase.from('app_admins').select('*').order('created_at', { ascending: true });
-        if (data) {
+        try {
+            const data = await apiClient.fetchAdmins();
             setAdmins(data);
+        } catch (error) {
+            console.error("Failed to fetch admins:", error);
         }
         setLoading(false);
     };
@@ -40,32 +43,13 @@ export default function AdminUserManagement() {
         let emailToAdd = newEmail.trim();
         if (emailToAdd.toLowerCase() === 'admin') emailToAdd = 'admin@labzoon.com';
 
-        const { error } = await supabase.from('app_admins').insert({
-            email: emailToAdd,
-            created_at: Date.now()
-        });
-
-        if (error) {
-            console.error("Add Admin Error:", error);
-            // Try to extract useful info even if 'message' is missing (which happens with 404s in some supabase-js versions)
-            let errorMessage = error.message;
-            const errObj = error as any;
-            
-            if (!errorMessage && (errObj.code === '404' || errObj.status === 404)) {
-                errorMessage = "数据库表 'app_admins' 不存在 (404)";
-            }
-            if (!errorMessage && typeof error === 'object') {
-                errorMessage = JSON.stringify(error);
-            }
-
-            if (errorMessage?.includes('404') || errorMessage?.includes('PGRST204')) {
-                alert(`添加失败：数据库表 'app_admins' 似乎不存在。\n\n请刷新页面，系统将检测并提示您运行 SQL 初始化脚本。`);
-            } else {
-                alert('添加失败: ' + errorMessage);
-            }
-        } else {
+        try {
+            await apiClient.addAdmin(emailToAdd);
             setNewEmail('');
             fetchAdmins();
+        } catch (error: any) {
+            console.error("Add Admin Error:", error);
+            alert('添加失败: ' + (error.message || '未知错误'));
         }
         setIsAdding(false);
     };
@@ -73,11 +57,11 @@ export default function AdminUserManagement() {
     const handleRemoveAdmin = async (email: string) => {
         if (!confirm(`确定要移除 ${email} 的管理员权限吗？`)) return;
         
-        const { error } = await supabase.from('app_admins').delete().eq('email', email);
-        if (error) {
-            alert('移除失败: ' + error.message);
-        } else {
+        try {
+            await apiClient.deleteAdmin(email);
             fetchAdmins();
+        } catch (error: any) {
+            alert('移除失败: ' + (error.message || '未知错误'));
         }
     };
 

@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import OpenAI from "openai";
 import { KnowledgeItem, Challenge, AIConfiguration } from './types';
+import { apiClient } from './apiClient';
 
 // --- Default Prompts ---
 
@@ -13,13 +14,14 @@ export const DEFAULT_PROMPTS = {
 
 生成规则：
 1. 题目数量：分解材料，根据知识点密度，单个知识点的考察要有，也要注意材料中描述的总体步骤等的考察，帮助学生记忆操作流程，操作要点，操作细节。为材料生成足够数量的题目(每个知识点5-10个考察题目，还要有全局性的梳理类题目至少有5-10个，比如知道正确的实验步骤，操作步骤之类的系统性梳理和总览性的考察)。
-2. 题目类型: MULTIPLE_CHOICE (单选), TRUE_FALSE (判断), FILL_BLANK (填空).
+2. 题目类型: SINGLE_CHOICE (单选), MULTIPLE_CHOICE (多选), TRUE_FALSE (判断), FILL_BLANK (填空).
 3. 【重要】针对分类与逻辑关系（如：包含关系、对比关系、层级结构）：
    - 请生成 **归类题**（例如：“X属于下列哪一类？”）。
    - 请生成 **排除题**（例如：“以下哪项不属于X的亚型？”）。
    - 请生成 **辨析题**（例如：“X与Y的主要区别是？”）。
    - 如果内容包含“相同/不同基因型”等对立概念，请务必出题考察这种区分。
-4. 【重要】选项格式 (MULTIPLE_CHOICE 和 TRUE_FALSE)：
+4. 【重要】选项格式 (SINGLE_CHOICE, MULTIPLE_CHOICE 和 TRUE_FALSE)：
+   - SINGLE_CHOICE: 必须为对象数组: [{"id": "A", "text": "选项内容"}, {"id": "B", "text": "选项内容"}]。
    - MULTIPLE_CHOICE: 必须为对象数组: [{"id": "A", "text": "选项内容"}, {"id": "B", "text": "选项内容"}]。
    - TRUE_FALSE: 必须包含两个选项: [{"id": "A", "text": "正确"}, {"id": "B", "text": "错误"}] (或其他合适的对立选项)。
    - 干扰项必须具有一定的迷惑性，不能一眼即假。
@@ -33,11 +35,18 @@ export const DEFAULT_PROMPTS = {
 示例结构：
 [
   {
-    "type": "MULTIPLE_CHOICE",
+    "type": "SINGLE_CHOICE",
     "question": "重组近交系（Recombinant Inbred Strains）属于以下哪种遗传分类？",
     "options": [{"id": "A", "text": "相同基因型"}, {"id": "B", "text": "不同基因型"}, {"id": "C", "text": "封闭群"}],
     "correctAnswer": "A",
     "explanation": "根据分类图谱，重组近交系是近交系的一种，属于具有相同基因型的品系。"
+  },
+  {
+    "type": "MULTIPLE_CHOICE",
+    "question": "以下哪些是近交系的特点？（多选）",
+    "options": [{"id": "A", "text": "基因高度纯合"}, {"id": "B", "text": "个体间基因型一致"}, {"id": "C", "text": "遗传多样性高"}],
+    "correctAnswer": "A||B",
+    "explanation": "近交系经过20代以上的全同胞兄妹交配，基因纯合度极高，个体间基因型基本一致，但遗传多样性低。"
   },
   {
     "type": "TRUE_FALSE",
@@ -45,6 +54,12 @@ export const DEFAULT_PROMPTS = {
     "options": [{"id": "A", "text": "正确"}, {"id": "B", "text": "错误"}],
     "correctAnswer": "A",
     "explanation": "近交系经过20代以上的全同胞兄妹交配，基因纯合度极高，个体间基因型基本一致。"
+  },
+  {
+    "type": "FILL_BLANK",
+    "question": "近交系通常需要经过___代以上的全同胞兄妹交配才能建立。",
+    "correctAnswer": "20",
+    "explanation": "根据标准定义，近交系需要经过20代以上的全同胞兄妹交配。"
   }
 ]`,
 
@@ -67,8 +82,9 @@ Instructions:
 3. 为每个 Lesson 中包含的内容，根据知识点密度，单个知识点的考察要有，也要注意材料中描述的总体步骤等的考察，为材料生成足够数量的题目(每个知识点5-10个考察题目，还要有全局性的梳理类题目至少有5-10个，比如知道正确的实验步骤，操作步骤之类的系统性梳理和总览性的考察)。
 
 题目生成规则：
-- 类型包括 MULTIPLE_CHOICE (单选), TRUE_FALSE (判断), FILL_BLANK (填空).
-- MULTIPLE_CHOICE 和 TRUE_FALSE 必须有 options。
+- 类型包括 SINGLE_CHOICE (单选), MULTIPLE_CHOICE (多选), TRUE_FALSE (判断), FILL_BLANK (填空).
+- SINGLE_CHOICE, MULTIPLE_CHOICE 和 TRUE_FALSE 必须有 options。
+  - SINGLE_CHOICE: [{"id":"A", "text":"..."}]
   - MULTIPLE_CHOICE: [{"id":"A", "text":"..."}]
   - TRUE_FALSE: [{"id":"A", "text":"正确"}, {"id":"B", "text":"错误"}]
 - FILL_BLANK 多空答案用 "||" 分隔。
@@ -85,10 +101,30 @@ JSON 结构示例 (必须严格遵守键名):
         "title": "小节标题",
         "challenges": [
           {
-            "type": "MULTIPLE_CHOICE",
+            "type": "SINGLE_CHOICE",
             "question": "问题内容...",
             "options": [{"id": "A", "text": "选项A"}],
             "correctAnswer": "A",
+            "explanation": "解析..."
+          },
+          {
+            "type": "MULTIPLE_CHOICE",
+            "question": "以下哪些是正确的？（多选）",
+            "options": [{"id": "A", "text": "选项A"}, {"id": "B", "text": "选项B"}],
+            "correctAnswer": "A||B",
+            "explanation": "解析..."
+          },
+          {
+            "type": "TRUE_FALSE",
+            "question": "判断题内容...",
+            "options": [{"id": "A", "text": "正确"}, {"id": "B", "text": "错误"}],
+            "correctAnswer": "A",
+            "explanation": "解析..."
+          },
+          {
+            "type": "FILL_BLANK",
+            "question": "填空题内容：___是答案。",
+            "correctAnswer": "答案",
             "explanation": "解析..."
           }
         ]
@@ -118,7 +154,7 @@ const getDefaultApiKey = (): string => {
 };
 
 // Default Configuration from environment variables
-let aiConfig: AIConfiguration = {
+const getDefaultAIConfig = (): AIConfiguration => ({
     provider: (import.meta.env.VITE_AI_PROVIDER as 'google' | 'openai') || 'google',
     apiKey: getDefaultApiKey(),
     baseUrl: import.meta.env.VITE_AI_BASE_URL || '',
@@ -131,47 +167,166 @@ let aiConfig: AIConfiguration = {
     systemPromptText: DEFAULT_PROMPTS.text,
     systemPromptImage: DEFAULT_PROMPTS.image,
     systemPromptStructure: DEFAULT_PROMPTS.structure
-};
+});
+
+let aiConfig: AIConfiguration = getDefaultAIConfig();
 
 // Try to load from localStorage on init (Client side only)
+// NOTE: This initial load is just for fallback/global state. 
+// Ideally components should request config for a specific user.
 try {
-    const savedConfig = localStorage.getItem('labzoon_ai_config');
-    if (savedConfig) {
-        const parsed = JSON.parse(savedConfig);
-        // Merge saved config with defaults to ensure new fields (prompts) exist if loading old config
-        aiConfig = { ...aiConfig, ...parsed };
-        
-        // Fallback for missing prompts in old saved configs
-        if (!aiConfig.systemPromptText) aiConfig.systemPromptText = DEFAULT_PROMPTS.text;
-        if (!aiConfig.systemPromptImage) aiConfig.systemPromptImage = DEFAULT_PROMPTS.image;
-        if (!aiConfig.systemPromptStructure) aiConfig.systemPromptStructure = DEFAULT_PROMPTS.structure;
-
-        // Auto-update structure prompt if it looks like the old one (missing JSON example)
-        if (aiConfig.systemPromptStructure && !aiConfig.systemPromptStructure.includes("JSON 结构示例")) {
-             console.log("Updating outdated structure prompt to new default.");
-             aiConfig.systemPromptStructure = DEFAULT_PROMPTS.structure;
-        }
-
-        // If no API key in saved config, use default from env
-        if (!aiConfig.apiKey) {
-            aiConfig.apiKey = getDefaultApiKey();
+    const savedUser = localStorage.getItem('labzoon_ai_config_user'); // Legacy key, kept for migration if needed
+    if (savedUser) {
+        const parsedUser = JSON.parse(savedUser);
+        aiConfig = { ...aiConfig, ...parsedUser };
+    } else {
+        const savedConfig = localStorage.getItem('labzoon_ai_config'); // Global config
+        if (savedConfig) {
+            const parsed = JSON.parse(savedConfig);
+            aiConfig = { ...aiConfig, ...parsed };
         }
     }
-} catch (e) {
-    console.warn("Failed to load AI config from storage", e);
-}
+    // Ensure defaults exist
+    if (!aiConfig.systemPromptText) aiConfig.systemPromptText = DEFAULT_PROMPTS.text;
+    if (!aiConfig.systemPromptImage) aiConfig.systemPromptImage = DEFAULT_PROMPTS.image;
+    if (!aiConfig.systemPromptStructure) aiConfig.systemPromptStructure = DEFAULT_PROMPTS.structure;
+    if (aiConfig.systemPromptStructure && !aiConfig.systemPromptStructure.includes("JSON 结构示例")) {
+        aiConfig.systemPromptStructure = DEFAULT_PROMPTS.structure;
+    }
+    if (!aiConfig.apiKey) {
+        aiConfig.apiKey = getDefaultApiKey();
+    }
+} catch {}
 
-export const updateAIConfig = (newConfig: Partial<AIConfiguration>) => {
-    aiConfig = { ...aiConfig, ...newConfig };
-    try {
-        localStorage.setItem('labzoon_ai_config', JSON.stringify(aiConfig));
-    } catch (e) {
-        console.error("Failed to save config", e);
+export const updateAIConfig = async (newConfig: Partial<AIConfiguration>, userId?: string) => {
+    // If userId provided, save to user-specific key
+    if (userId) {
+        try {
+            const current = await getAIConfig(userId);
+            const updated = { ...current, ...newConfig };
+            
+            // Save to localStorage
+            localStorage.setItem(`labzoon_ai_config_${userId}`, JSON.stringify(updated));
+            
+            // Also save to database
+            try {
+                await apiClient.updateUserAISettings({
+                    provider: updated.provider,
+                    api_key: updated.apiKey,
+                    base_url: updated.baseUrl,
+                    text_model: updated.textModel,
+                    image_model: updated.imageModel,
+                    temperature: updated.temperature,
+                    top_p: updated.topP,
+                    top_k: updated.topK,
+                    max_output_tokens: updated.maxOutputTokens,
+                    system_prompt_text: updated.systemPromptText,
+                    system_prompt_image: updated.systemPromptImage,
+                    system_prompt_structure: updated.systemPromptStructure,
+                });
+            } catch (dbError) {
+                console.warn('Failed to save user settings to database, but localStorage was updated:', dbError);
+            }
+            
+            // Also update the global variable if this is the current active context
+            // (This is a simplification, ideally we shouldn't rely on a global variable)
+            aiConfig = updated; 
+        } catch (e) {
+            console.error("Failed to save user config", e);
+        }
+    } else {
+        console.warn('Updating global AI config. This might affect all users if not careful.');
+        // Fallback to global update
+        aiConfig = { ...aiConfig, ...newConfig };
+        try {
+            localStorage.setItem('labzoon_ai_config', JSON.stringify(aiConfig));
+        } catch (e) {
+            console.error("Failed to save config", e);
+        }
     }
 };
 
-export const getAIConfig = (): AIConfiguration => {
+export const getAIConfig = async (userId?: string): Promise<AIConfiguration> => {
+    // If userId provided, try to load user-specific config
+    if (userId) {
+        try {
+            // First try to load from database (has priority over localStorage)
+            try {
+                // Use static import instead of dynamic import to avoid module resolution issues
+                const userSettings = await apiClient.getUserAISettings();
+                if (userSettings) {
+                    const defaultConfig = getDefaultAIConfig();
+                    // Map database fields to frontend fields
+                    const mappedSettings = {
+                        provider: userSettings.provider || defaultConfig.provider,
+                        apiKey: userSettings.api_key || defaultConfig.apiKey,
+                        baseUrl: userSettings.base_url || defaultConfig.baseUrl,
+                        textModel: userSettings.text_model || defaultConfig.textModel,
+                        imageModel: userSettings.image_model || defaultConfig.imageModel,
+                        temperature: userSettings.temperature ?? defaultConfig.temperature,
+                        topP: userSettings.top_p ?? defaultConfig.topP,
+                        topK: userSettings.top_k ?? defaultConfig.topK,
+                        maxOutputTokens: userSettings.max_output_tokens ?? defaultConfig.maxOutputTokens,
+                        systemPromptText: userSettings.system_prompt_text || DEFAULT_PROMPTS.text,
+                        systemPromptImage: userSettings.system_prompt_image || DEFAULT_PROMPTS.image,
+                        systemPromptStructure: userSettings.system_prompt_structure || DEFAULT_PROMPTS.structure,
+                    };
+                    
+                    // Ensure API Key (if not in database, use env default)
+                    if (!mappedSettings.apiKey) mappedSettings.apiKey = getDefaultApiKey();
+                    
+                    // Also save to localStorage for offline access
+                    localStorage.setItem(`labzoon_ai_config_${userId}`, JSON.stringify(mappedSettings));
+                    
+                    return mappedSettings;
+                }
+            } catch (dbError: any) {
+                console.warn('Failed to load user settings from database, falling back to localStorage:', dbError);
+                // If it's a network or server error, don't retry immediately
+                if (dbError.name === 'TypeError' && dbError.message.includes('JSON')) {
+                    console.error('Server returned non-JSON response. Server may be down or API endpoint incorrect.');
+                }
+            }
+            
+            // Fallback to localStorage
+            const savedUser = localStorage.getItem(`labzoon_ai_config_${userId}`);
+            if (savedUser) {
+                const parsedUser = JSON.parse(savedUser);
+                const defaultConfig = getDefaultAIConfig();
+                const merged = { ...defaultConfig, ...parsedUser };
+                
+                // Ensure defaults
+                if (!merged.systemPromptText) merged.systemPromptText = DEFAULT_PROMPTS.text;
+                if (!merged.systemPromptImage) merged.systemPromptImage = DEFAULT_PROMPTS.image;
+                if (!merged.systemPromptStructure) merged.systemPromptStructure = DEFAULT_PROMPTS.structure;
+                
+                // Ensure API Key (if not overridden by user, use env default)
+                // Note: If user explicitly cleared it, it might be empty string, which is fine if they want to use backend proxy
+                if (!merged.apiKey && !parsedUser.apiKey) merged.apiKey = getDefaultApiKey();
+                
+                return merged;
+            }
+        } catch {}
+    }
+
+    // Fallback to legacy/global config
+    try {
+        const savedUser = localStorage.getItem('labzoon_ai_config_user'); // Try legacy user key
+        if (savedUser) {
+            const parsedUser = JSON.parse(savedUser);
+            const merged = { ...aiConfig, ...parsedUser };
+            if (!merged.apiKey) merged.apiKey = getDefaultApiKey();
+            return merged;
+        }
+    } catch {}
     return { ...aiConfig };
+};
+
+// Check if we should use backend API (production mode)
+const useBackendAPI = (): boolean => {
+    // Use backend if API_URL is set to relative path (production) or explicitly enabled
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    return apiUrl.startsWith('/api') || apiUrl === '';
 };
 
 // --- Helper: Clean Markdown JSON ---
@@ -269,7 +424,9 @@ export const testAIConnection = async (config: AIConfiguration): Promise<{ succe
         } else {
             // Google GenAI
             const options: any = { apiKey: config.apiKey };
-            if (config.baseUrl) options.baseUrl = config.baseUrl;
+            if (config.baseUrl) {
+                options.httpOptions = { baseUrl: config.baseUrl };
+            }
 
             const ai = new GoogleGenAI(options);
             await ai.models.generateContent({
@@ -316,24 +473,27 @@ export const fileToBase64 = (file: File): Promise<string> => {
 // --- AI Helpers ---
 
 // Generate image from text
-export const generateImageForText = async (questionText: string, answerContext: string = ''): Promise<string | null> => {
+export const generateImageForText = async (questionText: string, answerContext: string = '', userId?: string): Promise<string | null> => {
+    // Get config for specific user
+    const config = await getAIConfig(userId);
+
     // Replace placeholders in the stored prompt
-    const prompt = aiConfig.systemPromptImage
+    const prompt = config.systemPromptImage
         .replace('{{question}}', questionText)
         .replace('{{answer}}', answerContext);
 
     try {
-        if (aiConfig.provider === 'openai') {
+        if (config.provider === 'openai') {
             const openai = new OpenAI({
-                apiKey: aiConfig.apiKey,
-                baseURL: aiConfig.baseUrl || undefined,
+                apiKey: config.apiKey,
+                baseURL: config.baseUrl || undefined,
                 dangerouslyAllowBrowser: true
             });
             
             // Allow any custom model name defined in config. 
             // Do NOT fallback to 'dall-e-3' if the user specified something else.
             const response = await openai.images.generate({
-                model: aiConfig.imageModel || 'dall-e-3', 
+                model: config.imageModel || 'dall-e-3', 
                 prompt: prompt,
                 n: 1,
                 size: "1024x1024",
@@ -343,12 +503,14 @@ export const generateImageForText = async (questionText: string, answerContext: 
             return b64 ? `data:image/png;base64,${b64}` : null;
         } else {
             // Google GenAI
-            const options: any = { apiKey: aiConfig.apiKey };
-            if (aiConfig.baseUrl) options.baseUrl = aiConfig.baseUrl;
+            const options: any = { apiKey: config.apiKey };
+            if (config.baseUrl) {
+                options.httpOptions = { baseUrl: config.baseUrl };
+            }
 
             const ai = new GoogleGenAI(options);
             const response = await ai.models.generateContent({
-                model: aiConfig.imageModel,
+                model: config.imageModel,
                 contents: { parts: [{ text: prompt }] },
                 config: { imageConfig: { aspectRatio: "1:1" } }
             });
@@ -367,17 +529,36 @@ export const generateImageForText = async (questionText: string, answerContext: 
 };
 
 // Generate Quiz Questions
-export const generateQuizQuestions = async (promptText: string, imagePart: any = null): Promise<Challenge[]> => {
-    if (!aiConfig.apiKey) {
+export const generateQuizQuestions = async (promptText: string, imagePart: any = null, userId?: string): Promise<Challenge[]> => {
+    // If userId is provided, ensure global state is synced (simplification for now)
+    // Ideally we should just use local config variable instead of global `aiConfig`
+    const config = await getAIConfig(userId);
+    
+    if (!config.apiKey) {
         throw new Error("API key is missing. Please check your configuration.");
     }
-    const systemInstruction = aiConfig.systemPromptText;
+    const systemInstruction = config.systemPromptText;
 
+    // Try to use backend API first (more secure, no browser API key exposure)
+    if (useBackendAPI() && !imagePart) {
+        try {
+            const questions = await apiClient.generateQuestions(promptText, systemInstruction, config);
+            return questions.map((q: any, idx: number) => ({
+                ...q,
+                id: q.id || `gen-api-${Date.now()}-${idx}`
+            }));
+        } catch (error) {
+            console.warn('Backend API failed, falling back to direct API call:', error);
+            // Fall through to direct API call
+        }
+    }
+
+    // Direct API call (fallback or when image is included)
     try {
-        if (aiConfig.provider === 'openai') {
+        if (config.provider === 'openai') {
             const openai = new OpenAI({
-                apiKey: aiConfig.apiKey,
-                baseURL: aiConfig.baseUrl || undefined,
+                apiKey: config.apiKey,
+                baseURL: config.baseUrl || undefined,
                 dangerouslyAllowBrowser: true
             });
 
@@ -399,15 +580,15 @@ export const generateQuizQuestions = async (promptText: string, imagePart: any =
 
             // Dynamically construct config
             const completionConfig: any = {
-                model: aiConfig.textModel,
+                model: config.textModel,
                 messages: messages,
-                temperature: aiConfig.temperature,
+                temperature: config.temperature,
                 // REMOVED response_format: { type: "json_object" } for better compatibility
             };
             
             // Only add max_tokens if explicitly set > 0. If 0 or undefined, let model use default (e.g., full context)
-            if (aiConfig.maxOutputTokens && aiConfig.maxOutputTokens > 0) {
-                completionConfig.max_tokens = aiConfig.maxOutputTokens;
+            if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+                completionConfig.max_tokens = config.maxOutputTokens;
             }
 
             // USE HELPER HERE
@@ -439,9 +620,10 @@ export const generateQuizQuestions = async (promptText: string, imagePart: any =
                 }
             }
         } else {
-            // Google GenAI
-            const options: any = { apiKey: aiConfig.apiKey };
-            if (aiConfig.baseUrl) options.baseUrl = aiConfig.baseUrl;
+            const options: any = { apiKey: config.apiKey };
+            if (config.baseUrl) {
+                options.httpOptions = { baseUrl: config.baseUrl };
+            }
 
             const ai = new GoogleGenAI(options);
             const parts: any[] = [{ text: promptText }];
@@ -451,9 +633,9 @@ export const generateQuizQuestions = async (promptText: string, imagePart: any =
             const genConfig: any = {
                 systemInstruction: systemInstruction,
                 responseMimeType: "application/json",
-                temperature: aiConfig.temperature,
-                topP: aiConfig.topP,
-                topK: aiConfig.topK,
+                temperature: config.temperature,
+                topP: config.topP,
+                topK: config.topK,
                 responseSchema: {
                   type: Type.ARRAY,
                   items: {
@@ -481,12 +663,12 @@ export const generateQuizQuestions = async (promptText: string, imagePart: any =
             };
 
             // Only add maxOutputTokens if explicitly set > 0
-            if (aiConfig.maxOutputTokens && aiConfig.maxOutputTokens > 0) {
-                genConfig.maxOutputTokens = aiConfig.maxOutputTokens;
+            if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+                genConfig.maxOutputTokens = config.maxOutputTokens;
             }
 
             const response = await ai.models.generateContent({
-              model: aiConfig.textModel,
+              model: config.textModel,
               contents: { parts },
               config: genConfig
             });
@@ -507,8 +689,9 @@ export const generateQuizQuestions = async (promptText: string, imagePart: any =
 };
 
 // Generate Options for a specific question
-export const generateOptionsForQuestion = async (questionText: string, type: string): Promise<any[]> => {
-    if (!aiConfig.apiKey) {
+export const generateOptionsForQuestion = async (questionText: string, type: string, userId?: string): Promise<any[]> => {
+    const config = getAIConfig(userId);
+    if (!config.apiKey) {
         throw new Error("API key is missing. Please check your configuration.");
     }
 
@@ -524,15 +707,15 @@ export const generateOptionsForQuestion = async (questionText: string, type: str
 4. 不要包含任何其他文字。`;
 
     try {
-        if (aiConfig.provider === 'openai') {
+        if (config.provider === 'openai') {
             const openai = new OpenAI({
-                apiKey: aiConfig.apiKey,
-                baseURL: aiConfig.baseUrl || undefined,
+                apiKey: config.apiKey,
+                baseURL: config.baseUrl || undefined,
                 dangerouslyAllowBrowser: true
             });
 
             const response = await createOpenAICompletion(openai, {
-                model: aiConfig.textModel,
+                model: config.textModel,
                 messages: [{ role: "user", content: prompt }],
                 temperature: 0.7,
             });
@@ -545,12 +728,14 @@ export const generateOptionsForQuestion = async (questionText: string, type: str
             }
         } else {
             // Google GenAI
-            const options: any = { apiKey: aiConfig.apiKey };
-            if (aiConfig.baseUrl) options.baseUrl = aiConfig.baseUrl;
+            const options: any = { apiKey: config.apiKey };
+            if (config.baseUrl) {
+                options.httpOptions = { baseUrl: config.baseUrl };
+            }
 
             const ai = new GoogleGenAI(options);
             const response = await ai.models.generateContent({
-                model: aiConfig.textModel,
+                model: config.textModel,
                 contents: { parts: [{ text: prompt }] },
                 config: {
                     responseMimeType: "application/json",
@@ -591,34 +776,58 @@ export interface StructuredUnit {
 }
 
 // Structured Generator
-export const generateStructuredCourseContent = async (text: string): Promise<StructuredUnit[]> => {
-    if (!aiConfig.apiKey) {
+export const generateStructuredCourseContent = async (text: string, userId?: string): Promise<StructuredUnit[]> => {
+    const config = await getAIConfig(userId);
+    if (!config.apiKey) {
         throw new Error("API key is missing. Please check your configuration.");
     }
-    const systemInstruction = aiConfig.systemPromptStructure;
+    const systemInstruction = config.systemPromptStructure;
 
+    // Try to use backend API first
+    if (useBackendAPI()) {
+        try {
+            const units = await apiClient.generateStructure(text, systemInstruction, config);
+            return units.map((unit: any, unitIdx: number) => ({
+                ...unit,
+                id: unit.id || `unit-api-${Date.now()}-${unitIdx}`,
+                color: unit.color || ['green', 'blue', 'purple', 'orange'][unitIdx % 4],
+                lessons: (unit.lessons || []).map((lesson: any, lessonIdx: number) => ({
+                    ...lesson,
+                    id: lesson.id || `lesson-api-${Date.now()}-${unitIdx}-${lessonIdx}`,
+                    completed: false,
+                    locked: lessonIdx > 0,
+                    stars: 0
+                }))
+            }));
+        } catch (error) {
+            console.warn('Backend API failed, falling back to direct API call:', error);
+            // Fall through to direct API call
+        }
+    }
+
+    // Direct API call (fallback)
     try {
-        if (aiConfig.provider === 'openai') {
+        if (config.provider === 'openai') {
             const openai = new OpenAI({
-                apiKey: aiConfig.apiKey,
-                baseURL: aiConfig.baseUrl || undefined,
+                apiKey: config.apiKey,
+                baseURL: config.baseUrl || undefined,
                 dangerouslyAllowBrowser: true
             });
 
             // Dynamically construct config
             const completionConfig: any = {
-                model: aiConfig.textModel,
+                model: config.textModel,
                 messages: [
                     { role: "system", content: systemInstruction },
                     { role: "user", content: text }
                 ],
-                temperature: aiConfig.temperature,
+                temperature: config.temperature,
                 // REMOVED response_format: { type: "json_object" }
             };
 
              // Only add max_tokens if explicitly set > 0
-             if (aiConfig.maxOutputTokens && aiConfig.maxOutputTokens > 0) {
-                completionConfig.max_tokens = aiConfig.maxOutputTokens;
+             if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+                completionConfig.max_tokens = config.maxOutputTokens;
             }
 
             // USE HELPER HERE
@@ -656,17 +865,19 @@ export const generateStructuredCourseContent = async (text: string): Promise<Str
             }
         } else {
             // Google GenAI
-            const options: any = { apiKey: aiConfig.apiKey };
-            if (aiConfig.baseUrl) options.baseUrl = aiConfig.baseUrl;
+            const options: any = { apiKey: config.apiKey };
+            if (config.baseUrl) {
+                options.httpOptions = { baseUrl: config.baseUrl };
+            }
             const ai = new GoogleGenAI(options);
 
              // Google config
              const genConfig: any = {
                 systemInstruction: systemInstruction,
                 responseMimeType: "application/json",
-                temperature: aiConfig.temperature,
-                topP: aiConfig.topP,
-                topK: aiConfig.topK,
+                temperature: config.temperature,
+                topP: config.topP,
+                topK: config.topK,
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
@@ -715,12 +926,12 @@ export const generateStructuredCourseContent = async (text: string): Promise<Str
             };
 
             // Only add maxOutputTokens if explicitly set > 0
-            if (aiConfig.maxOutputTokens && aiConfig.maxOutputTokens > 0) {
-                genConfig.maxOutputTokens = aiConfig.maxOutputTokens;
+            if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+                genConfig.maxOutputTokens = config.maxOutputTokens;
             }
 
             const response = await ai.models.generateContent({
-                model: aiConfig.textModel,
+                model: config.textModel,
                 contents: { parts: [{ text }] },
                 config: genConfig
             });
